@@ -10,7 +10,7 @@ Compile Claude Code JSONL logs into adaptive views for reading, searching, and c
 ## Usage
 
 ```bash
-python "path/to/VCC.py" <input.jsonl ...> [options]
+uv run "path/to/VCC.py" <input.jsonl ...> [options]
 ```
 
 | Option | Description |
@@ -23,7 +23,7 @@ python "path/to/VCC.py" <input.jsonl ...> [options]
 This tool also supports multi-file processing:
 
 ```bash
-cd "/path/to/target/folder" && python "path/to/VCC.py" *.jsonl --grep "keyword"
+cd "/path/to/target/folder" && uv run "path/to/VCC.py" *.jsonl --grep "keyword"
 ```
 
 ## Output Files
@@ -46,7 +46,7 @@ cd "/path/to/target/folder" && python "path/to/VCC.py" *.jsonl --grep "keyword"
 **1. Compile**
 
 ```bash
-python "path/to/VCC.py" "path/to/conversation.jsonl"
+uv run "path/to/VCC.py" "path/to/conversation.jsonl"
 ```
 
 Produces `.txt` + `.min.txt` next to the input file. Long conversations are automatically split into numbered chunks. The console output lists every produced file with line/word counts — read it to understand the conversation's size and structure before proceeding:
@@ -85,7 +85,7 @@ Each `*` line shows the tool name, key parameter, and two `.txt` line ranges: th
 Always use `--grep`, never system grep nor your embedded Grep tool. This script's `--grep` returns important block-level line RANGES that no other grep tools can provide. The output paths are relative to CWD, so `cd` close to the target first to keep outputs short and save tokens.
 
 ```bash
-cd "/path/to/target/folder" && python "path/to/VCC.py" "path/to/conversation.jsonl" --grep "keyword"
+cd "/path/to/target/folder" && uv run "path/to/VCC.py" "path/to/conversation.jsonl" --grep "keyword"
 ```
 
 Stdout example (`#` prefix = shortened filename)：
@@ -116,10 +116,10 @@ All line references point to `.txt`. Read the referenced range for full context.
 **Action**:
 
 1. `ls ~/.claude/projects/` — browse project directories, narrow the search area.
-2. `cd ~/.claude/projects/<project> && python "absolute/path/to/VCC.py" *.jsonl --grep "keyword"` — search top-level conversations first.
-3. If no results: `cd ~/.claude/projects/<project> && python "absolute/path/to/VCC.py" **/*.jsonl --grep "keyword"` — expand to subagents.
+2. `cd ~/.claude/projects/<project> && uv run "absolute/path/to/VCC.py" *.jsonl --grep "keyword"` — search top-level conversations first.
+3. If no results: `cd ~/.claude/projects/<project> && uv run "absolute/path/to/VCC.py" **/*.jsonl --grep "keyword"` — expand to subagents.
 
-**Critical**: Always `cd` into the target directory first, then use VCC globs — a single `cd && python VCC.py <glob> --grep` is the correct pattern. Without `cd`, grep output contains full absolute paths instead of short relative paths, wasting tokens. All content search on JSONL must use VCC's `--grep`, never system grep or the embedded Grep tool — VCC's `--grep` returns block-level line ranges with role tags that no other grep can provide.
+**Critical**: Always `cd` into the target directory first, then use VCC globs — a single `cd && uv run VCC.py <glob> --grep` is the correct pattern. Without `cd`, grep output contains full absolute paths instead of short relative paths, wasting tokens. All content search on JSONL must use VCC's `--grep`, never system grep or the embedded Grep tool — VCC's `--grep` returns block-level line ranges with role tags that no other grep can provide.
 
 ## /recall — Recover context from a previous conversation
 

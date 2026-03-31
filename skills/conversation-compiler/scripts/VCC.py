@@ -1,4 +1,8 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["pyyaml"]
+# ///
 """View-oriented Conversation Compiler (VCC) - compile Claude JSONL logs into adaptive views.
 
 Produces per conversation chain:
@@ -7,12 +11,12 @@ Produces per conversation chain:
   .view.txt  View mode (search-focused, only with --grep)
 
 Usage:
-  python VCC.py conversation.jsonl              # .txt + .min.txt
-  python VCC.py conversation.jsonl --grep "kw"  # + .view.txt + stdout search hits
-  python VCC.py conversation.jsonl -t 128       # truncation limit (tokens, default 128)
-  python VCC.py conversation.jsonl -tu 256      # user message truncation limit (default 256)
-  python VCC.py conversation.jsonl -o outdir    # output directory
-  python VCC.py project/*.jsonl --grep "kw"     # multi-file search
+  uv run VCC.py conversation.jsonl              # .txt + .min.txt
+  uv run VCC.py conversation.jsonl --grep "kw"  # + .view.txt + stdout search hits
+  uv run VCC.py conversation.jsonl -t 128       # truncation limit (tokens, default 128)
+  uv run VCC.py conversation.jsonl -tu 256      # user message truncation limit (default 256)
+  uv run VCC.py conversation.jsonl -o outdir    # output directory
+  uv run project/*.jsonl --grep "kw"            # multi-file search
 """
 
 import argparse
@@ -22,7 +26,7 @@ import json
 import os
 import re
 import sys
-import yaml
+import yaml  # pyright: ignore[reportMissingModuleSource]
 
 import glob as globmod
 

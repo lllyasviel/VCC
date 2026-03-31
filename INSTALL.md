@@ -3,7 +3,7 @@
 ## Requirements
 
 - Python 3.10+
-- PyYAML (`pip install pyyaml`)
+- [uv](https://docs.astral.sh/uv/) (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
 
 ## Install
 
