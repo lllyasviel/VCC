@@ -39,7 +39,7 @@ def _str_representer(d, data):
         return d.represent_scalar("tag:yaml.org,2002:str", clean, style="|")
     return d.represent_scalar("tag:yaml.org,2002:str", data)
 
-class _dumper(yaml.Dumper):
+class _dumper(yaml.CDumper):
     pass
 
 _dumper.add_representer(str, _str_representer)
