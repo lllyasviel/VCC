@@ -135,3 +135,30 @@ All line references point to `.txt`. Read the referenced range for full context.
    - **REALLY read files** — Read all files referenced in the conversation with your Read tool. Pre-loaded content from system-reminders or prior conversation turns does NOT count — it may be truncated, stale, or lossy. You must issue a fresh Read call for each file, even if you believe you already have its content. 99.97% of the time, the user has externally modified nearly every file between sessions. If you skip reading and miss their external changes, your failure rate is effectively 100%.
    - **Key details** — Identify specific values, paths, configs, and logic mentioned in the conversation. Compare against the actual files to catch drift or errors.
    - **Understand the journey** — Trace the user's intent, decision sequence, and direction changes. Understand not just what was done, but how and why they got there.
+
+## /remember — Mark or search memory points
+
+**Trigger**: The user wants to bookmark a conversation point, or asks "do you remember..." about past conversations.
+
+**Action**:
+
+1. **To mark**: After compiling a conversation with VCC, identify the relevant line number in the `.txt` output, then:
+   ```bash
+   python "absolute/path/to/VCC_memory.py" mark "path/to/conversation.jsonl" --line 450 --tag "description"
+   ```
+
+2. **To search memory**: Use the memory index to find past conversations by keyword or topic:
+   ```bash
+   python "absolute/path/to/VCC_memory.py" search "query"
+   python "absolute/path/to/VCC_memory.py" search "query" --fuzzy
+   python "absolute/path/to/VCC_memory.py" timeline "topic"
+   ```
+
+3. **To build/rebuild index**: Index JSONL files so they become searchable:
+   ```bash
+   python "absolute/path/to/VCC_memory.py" index --all
+   ```
+
+Memory search returns pointers (JSONL path + chain index + suggested lines), not content. Use VCC `--grep` or Read to retrieve the actual content from the pointed locations.
+
+**Note**: The memory index is automatically updated during VCC compilation. Manual `index` is only needed for first-time setup or to index files that haven't been compiled yet.
