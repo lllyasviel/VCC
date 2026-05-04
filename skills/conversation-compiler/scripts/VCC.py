@@ -1006,6 +1006,14 @@ def compile_pass(input_path, output_dir=None, truncate=128, truncate_user=256,
 
         ir = parse(chain, output_dir, f"{base}{sfx}", data_ctr)
         assign_lines(ir)
+
+        # VCC Memory: incrementally index this chain (best-effort, never blocks compilation)
+        try:
+            from VCC_memory import index_from_ir
+            index_from_ir(input_path, i, ir, chain, ffn)
+        except Exception:
+            pass
+
         lower_brief(ir, truncate, ffn, truncate_user)
 
         full = emit(ir, "content")
