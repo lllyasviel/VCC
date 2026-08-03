@@ -1,0 +1,9 @@
+{"type":"session_meta","timestamp":"2026-01-01T00:00:00Z","payload":{"id":"fixture-session"}}
+{"type":"response_item","timestamp":"2026-01-01T00:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"first-window"}]}}
+{"type":"compacted","timestamp":"2026-01-01T00:00:02Z","payload":{"message":"","replacement_history":[{"type":"compaction","encrypted_content":"opaque"}],"window_number":1,"first_window_id":"w1","previous_window_id":"w1","window_id":"w2"}}
+{"type":"event_msg","timestamp":"2026-01-01T00:00:03Z","payload":{"type":"context_compacted"}}
+{"type":"response_item","timestamp":"2026-01-01T00:00:04Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"second-window"}]}}
+{"type":"compacted","timestamp":"2026-01-01T00:00:05Z","payload":{"message":"","replacement_history":[{"type":"compaction","encrypted_content":"opaque"}],"window_number":2,"first_window_id":"w1","previous_window_id":"w2","window_id":"w3"}}
+{"type":"event_msg","timestamp":"2026-01-01T00:00:06Z","payload":{"type":"token_count"}}
+{"type":"event_msg","timestamp":"2026-01-01T00:00:07Z","payload":{"type":"context_compacted"}}
+{"type":"response_item","timestamp":"2026-01-01T00:00:08Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"latest-window"}]}}

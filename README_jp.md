@@ -1,286 +1,255 @@
 # VCC: View-oriented Conversation Compiler
 
-（本ドキュメントは Claude Code による翻訳を人間がレビューしたものです）
-
 [English](README.md) | [简体中文](README_cn.md) | [日本語](README_jp.md)
 
-"View-oriented Conversation Compiler for Agent Trace Analysis" の公式実装 ([論文](https://arxiv.org/abs/2603.29678))
+VCC はローカルの agent セッション JSONL を、読みやすく検索可能な transcript view にコンパイルします。block の役割と安定した行範囲参照を保持し、GitHub Copilot CLI、Codex、Claude Code の形式を自動判別します。
 
-このリポジトリは普段使い用です。論文の学術実験を再現するには [VCC-experiments](https://github.com/lllyasviel/VCC-experiments) を参照してください。
+VCC は “View-oriented Conversation Compiler for Agent Trace Analysis” の実装です（[論文](https://arxiv.org/abs/2603.29678)）。学術実験の再現用コードは [VCC-experiments](https://github.com/lllyasviel/VCC-experiments) にあります。
 
-VCC は会話ログ (Claude Code の JSONL) を効率的で agent フレンドリーなビューにコンパイルするコンパイラです。これで Claude Code の `/compact` はもう怖くない - CC がやっと compact されたコンテキストの元の詳細を見れるようになります。全ての Claude Code 会話を横断検索する機能もあります。
+## 対応クライアント
 
-VCC をインストールすると大体こうなります:
+| クライアント | 代表的なローカル入力 | 正規化する内容 |
+|---|---|---|
+| GitHub Copilot CLI | `${COPILOT_HOME:-$HOME/.copilot}/session-state/*/events.jsonl` | message、reasoning、tool、result、compaction |
+| Codex | `${CODEX_HOME:-$HOME/.codex}/sessions/YYYY/MM/DD/rollout-*.jsonl` | message、function/custom tool event |
+| Claude Code | `$HOME/.claude/projects/**/*.jsonl` | message、thinking、tool、result、compaction |
 
-- 早くインストールしていたらCCの `/compact` と格闘するために無駄にしたお金が節約できたことに気づく。
-- `/compact` + `/recall` がお気に入りのコンボになる。
-- なんで CC に最初から入ってないのか不思議に思い始める。
-- 自分のマルチレイヤー RAG メモリシステム、自己進化 agent スキルメモリ、その他15個の AGI 発明を削除する - 本当に持ってたらの話だけど...
+元の JSONL が常に正本です。生成 view は再生成可能な派生データで、進行中のセッションが追記されると古くなります。
 
-[論文](https://arxiv.org/abs/2603.29678)もあって、VCC がとある学術ベンチマークで context learning と agent trace 分析と harness 設計を改善することを示しています。
+### Default source priority
 
-# インストール
+`searchchat` と `recall` は常に 3 client を同時検索するわけではありません。
 
-現在 Claude Code のみ対応。Codex と OpenClaw は近日対応予定。
+1. ユーザーが明示した client または client set を最優先。
+2. global/cross-platform が明示された場合は全ての既存 source を検索。
+3. それ以外は、この skill を実行している現在の agent client の履歴を先に検索。
+4. 最初の tier に信頼できる match がない、曖昧、または利用不能な場合だけ他 client に拡張。
+5. Runtime context から現在の client を判定できない場合は、全 source 検索へ fallback し、その事実を報告。
 
-インストールするには、これを Claude Code にコピペしてください:
+Directory の存在だけでは current agent を判定しません。結果には使用した tier と root を記載します。
 
-    Please help me install the skills from
-    https://github.com/lllyasviel/VCC.git
-    just clone it then follow the INSTALL.md
+## 4 つの skill
 
-アップデート:
+4 つをまとめてインストールしてください。
 
-    Please help me update the skills from
-    https://github.com/lllyasviel/VCC.git
-    just clone it then follow the INSTALL.md
+| Skill | 用途 |
+|---|---|
+| `conversation-compiler` | 既知の JSONL を直接コンパイルする |
+| `readchat` | 既知の 1 セッションを正確な transcript で確認する |
+| `searchchat` | 全候補を保存せずローカル履歴を検索する |
+| `recall` | 過去の判断を復元し、現在の workspace と照合する |
 
-アンインストール:
+インストールと検証は [INSTALL.md](INSTALL.md) を参照してください。
 
-    Please help me uninstall VCC skills by deleting
-    `conversation-compiler`, `readchat`, `recall`, `searchchat`
-    from my `.claude/skills`
+## クイックスタート
 
-インストール、アップデート、アンインストール後は Claude Code を再起動してください。
+1 セッションを VCC の private managed cache にコンパイルします。
 
-# 基本的な使い方
-
-Compact がトリガーされたら (自動でも手動でも)、すぐに `/recall` できます。
-
-例えば、自動 compact や手動 `/compact` の後に `(... compacted)` みたいなのが表示されます。そしたら:
-
-`/recall`
-
-で CC が全部自動で思い出してくれます。もしくは
-
-`/recall let's review our conversation`
-
-`/recall in those six rounds of analysis we just did, which access attempt causes the second layer of the server's three-layer log to crash?`
-
-`/recall go through all six details I mentioned about the user survey again`
-
-`/recall review my thought process so far`
-
-新しい会話では `/searchchat` か `/recall` (検索にフォールバックします) が使えます。例えば:
-
-`/searchchat how did we handle the captcha in that browser listener system we discussed last time?`
-
-`/recall did we decide to use React for that canvas solution we discussed last time?`
-
-これらのコマンドで数ヶ月分の会話履歴から元のチャットを見つけて復元できます。
-
-`/readchat` は上級者向けです、下記参照。
-
-# 仕組み
-
-Claude Code の JSONL はこんな感じです (`~/.claude/projects` に沢山あります):
-
-```
-{"type":"user","message":{"id":"msg_user1","content":"I have two pets.\nCan you write a P..."}}
-{"type":"assistant","message":{"id":"msg_asst1","content":[{"type":"thinking","thinking":"The
-user wants a pet tracking module.\nThey have a dog (Buddy) and a cat (Whiskers).\nLet me chec
-k if there's an existing file first...
+```bash
+python "skills/conversation-compiler/scripts/VCC.py" "path/to/session.jsonl"
 ```
 
-これが以下のビューにコンパイルされます:
+大量のセッションをファイル生成なしで検索します。
 
-## UI View
-
-ユーザーが CC で実際に見たものをシミュレートします
-
-```
-[user]
-
-I have two pets.
-Can you write a Python module for tracking them?
-One is a dog named Buddy and a cat named Whiskers.
-
-[assistant]
-
-Sure! Let me check if there's an existing file.
-
-* Read "src/pets.py" (example.txt:18-20,23-25)
-
-No existing file.
-I'll create a module with Dog and Cat classes.
-
-* Write "src/pets.py" (example.txt:40-63,66-68)
-
-Created src/pets.py.
+```bash
+python "skills/conversation-compiler/scripts/VCC.py" "path/to/**/*.jsonl" \
+  --grep "literal-or-regex" --search-only
 ```
 
-`(example.txt:18-20,23-25)` のようなポインタで下の full view の該当行にジャンプできます。
+自動処理では明示的な query semantics と structured output を推奨します。
 
-## Full View
-
-完全なトランスクリプト。行番号は一度だけ割り当てられて、全ビューで共有されます。
-
-これが `example.txt` だとします:
-
-```
-  1  [user]
-  2
-  3  I have two pets.
-  4  Can you write a Python module for tracking them?
-  5  One is a dog named Buddy and a cat named Whiskers.
-  6
-  7  ══════════════════════════════
-  8  [assistant]
-  9
- 10  >>>thinking
- 11  The user wants a pet tracking module.
- 12  They have a dog (Buddy) and a cat (Whiskers).
- 13  Let me check if there's an existing file first.
- 14  <<<thinking
- 15
- 16  Sure! Let me check if there's an existing file.
- 17
- 18  >>>tool_call Read:tu01
- 19  file_path: src/pets.py
- 20  <<<tool_call
- 21
- 22  ══════════════════════════════
- 23  [tool_error] Read:tu01
- 24
- 25  Error: file not found src/pets.py
- 26
- 27  ══════════════════════════════
- 28  [assistant]
- 29
- 30  >>>thinking
- 31  No existing file.
- 32  I'll create Dog and Cat subclasses.
- 33  The dog needs walk tracking.
- 34  The cat needs nap tracking.
- 35  <<<thinking
- 36
- 37  No existing file.
- 38  I'll create a module with Dog and Cat classes.
- 39
- 40  >>>tool_call Write:tu02
- 41  file_path: src/pets.py
- 42  content: |
- 43    class Pet:
- 44        def __init__(self, name, species):
- 45            self.name = name
- 46            self.species = species
- 47
- 48    class Dog(Pet):
- 49        def __init__(self, name):
- 50            super().__init__(name, 'dog')
- 51            self.walks = []
- 52
- 53        def log_walk(self, duration, distance):
- 54            self.walks.append({'min': duration, 'km': distance})
- 55
- 56    class Cat(Pet):
- 57        def __init__(self, name):
- 58            super().__init__(name, 'cat')
- 59            self.naps = []
- 60
- 61        def log_nap(self, duration, spot):
- 62            self.naps.append({'min': duration, 'spot': spot})
- 63  <<<tool_call
- 64
- 65  ══════════════════════════════
- 66  [tool] Write:tu02
- 67
- 68  File written successfully.
- 69
- 70  ══════════════════════════════
- 71  [assistant]
- 72
- 73  Created src/pets.py.
+```bash
+python "skills/conversation-compiler/scripts/VCC.py" "path/to/**/*.jsonl" \
+  --term VCC --term cache --match all --ignore-case --format ndjson --search-only
 ```
 
-## Adaptive View `--grep dog`
+Current client 優先で local history を決定的に検索します。
 
-ビューは `--grep dog` のような検索クエリに適応できます。マッチを含むブロックだけが表示されますが、会話の構造は保持されます。各ブロックには full view へのポインタがあります。
-
-```
-[user]
-
-(example.txt:3-5)
-  5: One is a dog named Buddy and a cat named Whiskers.
-
-══════════════════════════════
-[assistant]
-
->>>thinking
-(example.txt:11-13)
-  12: They have a dog (Buddy) and a cat (Whiskers).
-<<<thinking
-
-══════════════════════════════
-[assistant]
-
->>>thinking
-(example.txt:31-34)
-  33: The dog needs walk tracking.
-<<<thinking
-
->>>tool_call Write:tu02
-(example.txt:41-62)
-  50:           super().__init__(name, 'dog')
-<<<tool_call
+```bash
+python "skills/conversation-compiler/scripts/VCC.py" history-search "VCC cache" \
+  --current-client codex --format json
 ```
 
-`Write:tu02` は 22 行のコード (41-62) ですが、マッチしたのは 50 行目 (`'dog'`) だけ: Cat クラス (56-62) は含まれていません。ポインタ `41-62` が agent にフルブロックの場所を教えます。
+選択したセッションだけを private cache に保存します。
 
-## Transposed View `--grep dog`
-
-同じマッチ結果ですが、フラットなリストとして。各エントリにはそれが何か (ユーザーメッセージ、thinking、tool call など) と full view での場所がタグ付けされています:
-
-```
-(example.txt:3-5) [user]
-  5: One is a dog named Buddy and a cat named Whiskers.
-
-(example.txt:11-13) [thinking]
-  12: They have a dog (Buddy) and a cat (Whiskers).
-
-(example.txt:31-34) [thinking]
-  33: The dog needs walk tracking.
-
-(example.txt:41-62) [tool_call]
-  50:           super().__init__(name, 'dog')
+```bash
+python "skills/conversation-compiler/scripts/VCC.py" "path/to/selected.jsonl" \
+  --grep "literal-or-regex"
 ```
 
-Adaptive view は会話順を保つのでマッチ周辺のコンテキストの理解に向いています。Transposed view はフラットリストなので全マッチを一気にスキャンするのに向いています。全ポインタは full view を指します。
+`-o` がない場合、VCC は `${VCC_CACHE_DIR}`、`${XDG_CACHE_HOME}/vcc`、Windows local app-data cache、`~/.cache/vcc` の順に選択します。`--cache-dir` はこの private location の override にだけ使います。`-o <dir>` は明示的な export にだけ使用してください。共有出力先は同じ stem の入力を write 前に拒否します。
 
-# Q&A
+## 出力
 
-### "また agent メモリシステム？"
+| Artifact | 生成条件 | 用途 |
+|---|---|---|
+| `.txt` | materialized compile | 高忠実度の意味 view と行参照先 |
+| `.min.txt` | materialized compile | tool を参照に畳んだ短縮 view |
+| `.view.txt` | `--grep` 付き materialized compile | 会話構造を保った matching block |
+| stdout matches | `--grep` | role 付きの逆時系列 match |
+| `metadata.json` | managed cache | 入力 path、size、timestamp、生成 parameter、artifact hash |
 
-違います。メモリシステムは事前計算されたもの、例えば summary、embedding、graph とかを保存します。それらの構造やレイヤーは普通は静的です。しかも大体 LLM を呼んで要約とかさせてます...
+`--search-only` はファイルを書きません。`::rendered` の範囲は探索用の仮想参照です。正確な範囲を読む前に、選択した入力を materialize してください。
 
-VCC は何も保存しません。ビューは動的です。元の JSONL からその場で計算されて、使ったら捨てられます。(これを "projection" と呼んでいます。)
+## 保存期間の方針
 
-### "それってただの grep では？"
+VCC は memory database を維持せず、セッションを upload しません。ただし view を materialize するとローカル派生ファイルを作成します。
 
-全然違います。Grep はマッチした行を返しますが、そのマッチがユーザーの発言なのか、agent の思考なのか、tool call なのか、tool result なのか区別がつきません。VCC には **block range pointers** と **block roles** があります。
+- 明示的な compile: private managed cache を使い、source history directory を変更しない。
+- `readchat` / `recall`: 選択した session の cache entry を follow-up で再利用。
+- 大規模な `searchchat`: `--search-only` を使い、不一致候補を保存しない。
+- 明示的な export: `-o` を使い、永続的なユーザー成果物として扱う。
 
-*「じゃあチャットログをメッセージごとにファイル分割してファイルシステム grep は？structured grep は？俺の XXXX データベースシステムは？」* と聞き続ける人もいるかもしれませんが、
+Cache は再生成できます。入力 JSONL の更新や VCC の upgrade 後は再生成し、不要な entry は削除できます。
+有効な full/brief cache は既定で再利用します。canonical source path、size、timestamp、file identity、truncate parameter、VCC version が一致する場合だけ有効です。Windows は replacement が identity を保持できるため source SHA-256 も検証します。`--cache-policy refresh` で強制再生成できます。
 
-Adaptive view から full view にブロック行番号でジャンプすると、周囲のコンテキストはそこにあります。file-per-message の分割から同じことをやろうとすると、階層を追跡するためのツリー的なものと時間順を追跡するためのリンクリストが必要で、両方メンテする必要があって、さらに "時間的に隣接する" もののうちどれだけが本当に正しい周辺コンテキストなのかも判断しないといけません。やっとやっと動くようにした頃には基本的に VCC を再実装しています..
+## Structured search と ranking
 
-### "でもこれ pretty-print でしょ？"
+単一 literal は `--literal`、複数 anchor は反復 `--term` と `--match all|any`、regex が必要な場合だけ `--grep` を使います。`--format json|ndjson` は source、role、full-view range、matched pattern、matching line、決定的 score を含む versioned block record を出力します。user/assistant match は説明のない tool output より上位ですが、ranking は候補選択用で結論の証拠ではありません。
 
-全く違います。Pretty-print はテキストを整形するだけです。VCC は本物のコンパイラで、lex, parse, IR, lower, emit があります。いくつか例を挙げると:
+`history-search` は Copilot、Codex、Claude root を列挙し、明示された current client を最初に検索し、no/weak match の場合だけ既定で拡張します。current client が不明なら全 source fallback を報告します。`--current-session` は compaction recovery 用の exact first tier です。
 
-* Lexer が parse の前に `queue-operation`, `progress`, `api_error` などのゴミレコードを落とす
-* Parser が tool call パラメータをエスケープされた JSON blob から読みやすいインデント付きテキストに変換する
-* Parser は Read tool の結果から `数字→` プレフィックスを除去して元のソースを復元し、base64 画像もファイルにデコードする
-* IR 段階で、compaction により分裂した assistant メッセージ (同じ ID だけど複数 JSONL レコード) が一つの section に再組立てされる
-* Lowering が harness の XML (`<system-reminder>`, `<ide_opened_file>` など) を除去し、内部ツール (`TodoWrite`, `ToolSearch`) をフィルタし、ANSI エスケープコードをクリーンアップし、マークアップだけのユーザー turn を隠す
-* Emitter が一つの行番号座標系を共有する三つのビューを出力する
+Diagnostics schema v2 は source accounting と normalized output を分離します。`source_records_supported + source_records_ignored + source_records_unknown` は常に `source_records_total` と一致し、1 source event が複数 record を生成できるため `normalized_records_emitted` は異なる場合があります。`recall_selection` は pre-compaction と latest brief view を直接示します。
 
-IR 段階で行番号を一度だけ割り当てて全ての一貫性を保証します。その後 lowering は選択、切り詰め、注釈しかできません。行番号の並べ替えや再割り当てはできません。なのでビュー間のポインタは常に一貫しています。
+Recall では `--chain-window 2` を渡し、選択された 2 chain だけを materialize します。VCC は 4096 文字超と一般的な nested unbounded repeat/backreference regex を既定で拒否します。literal/term を優先し、`--allow-unsafe-regex` は trusted input 用の明示 override としてだけ使用します。
 
-# Cite
+## 実装原理とアルゴリズム
 
-    @article{zhang2026vcc,
-      title={View-oriented Conversation Compiler for Agent Trace Analysis},
-      author={Lvmin Zhang and Maneesh Agrawala},
-      year={2026},
-      url={https://github.com/lllyasviel/VCC}
-    }
+VCC は各入力に対して次の決定的 pipeline を実行します。
+
+1. JSONL を逐次 lex し、Copilot、Codex、Claude の形式を判定。
+2. client 固有の message/tool event を共通 record に normalize。
+3. streamed assistant chunk を merge し、compaction chain を split。
+4. message、reasoning、tool、result、media を IR に parse。
+5. full IR に一度だけ行番号を割り当て、全 view の座標を固定。
+6. 行番号を変えず brief/focused view に lower。
+7. file を emit、または search-only match を stream。
+
+Executable entry point は意図的に薄く保ち、実装は一方向依存の `scripts/vcc/` に置きます。
+
+| Module | 責務 |
+|---|---|
+| `common.py` | 共通 version、limit、error、text utility |
+| `normalizers.py` | Codex と GitHub Copilot 固有 schema adapter |
+| `parser.py` | client 判定、JSONL validation、chain/media、diagnostics、IR 構築 |
+| `renderer.py` | stable line assignment と full/brief/focused lowering |
+| `query.py` | block match、deterministic score、source limit、text/JSON/NDJSON output |
+| `cache.py` | atomic write、cache key、manifest、integrity validation、cleanup、permission |
+| `compiler.py` | parser、renderer、storage を接続する single-session pipeline |
+| `cli.py` | argument validation、glob 展開、multi-input isolation、cache policy、exit status |
+
+`scripts/VCC.py` は executable setup と `vcc.cli` への dispatch だけを担当します。`history_search.py` は同じ公開 CLI protocol を使う独立した history-discovery service です。内部 module は entry point に依存せず、parser/renderer/query は CLI policy に依存しません。
+
+Base64 media は materialized view の場合だけ decode され、`--search-only` は placeholder のみを保持します。tool call と result は tool ID で関連付けられます。full view は VCC 行参照の基準ですが、未対応または意図的に省略した event については元の JSONL が正本です。
+
+## 時間・空間計算量
+
+1 file について `C` を text/JSON サイズ、`R` を record 数、`B` を IR node/section 数、`L` を出力サイズ、`M` を media 総 byte 数、`Mmax` を最大の単一 decoded payload、`F` を入力 file 数とします。
+
+| Stage | Time | Peak memory / disk |
+|---|---|---|
+| Input 展開 + mtime sort | `O(F log F)` | `O(F)` path |
+| Lex + normalize | `O(C + R)` | `O(R)` parsed record と current raw line |
+| Merge + chain split | `O(R)` | `O(R)` |
+| Parse + IR | `O(C + B + M)` | transient memory `O(C + B + Mmax)`、media `O(M)` |
+| Line assignment + emit | `O(B + L)` | buffer `O(L)` |
+| Brief/focused lowering | `O(C + B)` | section/visibility index を IR ごとに一度構築 |
+| Regex match | pattern 依存 | 単純 pattern は通常 `O(C)` に近いが、病的な Python `re` は超線形 backtracking の可能性あり |
+
+Regex pattern 依存の挙動を除き、materialized file 1 件は `O(C + B + L + M)`、peak working memory は `O(C + B + L + Mmax)` です。各結果を次の file の前に明示的に解放するため、peak は合計ではなく最大 file に依存します。
+
+1 materialized file の persistent disk は `O(Lfull + Lbrief + Lview + M)` です。複数 file では各項の合計に `O(F)` の小さな metadata が加わります。`--search-only` の persistent output は `O(1)` で、埋め込み media を decode しません。
+
+Valid-cache check は POSIX filesystem では source size に対して `O(1)` です。Windows では size、timestamp、file identity を保持する replacement を検出するため source SHA-256 を streaming 計算し、`O(C)` time、`O(1)` extra memory です。
+
+## Token 消費
+
+`VCC.py` の実行自体は **LLM/API token を 0** 消費します。ローカルの決定的 Python program であり、agent が view または stdout を読むときだけ model context token が消費されます。
+
+Console の `words` は OpenAI、Anthropic、GitHub の model token 数ではありません。VCC 独自の軽量 tokenizer による相対サイズです。
+
+`U` を user block 数、`A` を assistant text block 数、`Stool` を出力された tool summary の lexical 総量、`tu` を `-tu`、`t` を `-t` とすると：
+
+- Full view は概ね `Θ(Cvisible)` の lexical content。
+- Brief view は概ね `O(U·tu + A·t + Stool + headers)`。thinking と tool-result 本文は通常除外。path や pattern など一部 summary field には固定上限がありません。
+- Focused/search output は全 transcript ではなく matching line と block metadata に比例。
+
+Token を最小化するには、`--search-only` → 選択 session だけ materialize → `.min.txt` → 必要な `.txt` range の順で読みます。正確な token 数は実際に view を読む model の tokenizer で測定してください。
+
+## 現在の状態とロードマップ
+
+VCC 2.3.0 は個人 workflow、local team での利用、public beta に利用できる状態です。ただし、集中型 multi-tenant conversation-history service を目的としていません。現在検証済みの範囲では、release を妨げる既知の P0/P1 issue はありません。
+
+現在の release 根拠：
+
+- Codex、Claude Code、GitHub Copilot CLI log の deterministic な parse と search。
+- 42 件の自動 test、4 件の skill-package validator、3 client を対象とする代表的な sanitized fixture。
+- 複数の compaction boundary を含む実際の Codex session による検証。
+- 対応 Python 範囲での Linux、macOS、Windows CI と、再現可能な benchmark tool。
+- media decode 上限、cache integrity check、conservative regex guard、source-aware recall selection。
+
+Source JSONL が常に正本です。生成 view と cache は派生成果物であり、使用後に削除できます。反復検索の利点が storage と privacy cost を上回る場合だけ、非公開で保持してください。`--chain-window` は後段の IR、render、disk、agent context cost を削減しますが、normalize は現在の入力の parsed record を保持するため、非常に大きな単一 session では file size に比例した memory が必要です。
+
+優先する今後の改善：
+
+1. 各 client に stateful single-pass streaming normalizer を実装し、deterministic output を維持しながら巨大 log の peak memory を削減する。
+2. Client format の変化に合わせ、実際の schema fixture、schema-drift check、malformed-input test、fuzz coverage を拡充する。
+3. OS に依存しない regex execution isolation または hard timeout を追加する。現在の guard は意図的に保守的で、`--allow-unsafe-regex` は明示的な escape hatch です。
+4. より大きな benchmark tier、peak RSS、長時間の cache behavior で performance regression を追跡する。
+5. Reliable な replacement identity を提供しない filesystem 向けに optional cross-platform high-integrity hash mode を追加する。Windows hash は既に automatic です。
+6. 実測 workload が必要性を示した場合だけ、opt-in かつ privacy-preserving な incremental content index を検討する。既定では raw conversation text を permanent index に複製しません。
+
+将来の client schema は fixture と test で確認されるまで互換とはみなしません。VCC は session data を upload せず、cloud service に依存しません。
+
+## Privacy と制限
+
+ログと view には source code、command、path、tool output、credential などの機密情報が含まれる可能性があります。
+
+- Cache を非公開にし、source control と cloud sync から除外してください。
+- `--cache-dir` は POSIX 上で owner-only permission を best effort で設定します。
+- 生成 view を公開する前に内容を確認してください。
+- 改行されていない不完全な JSONL 最終行は、既定では live-session tail として警告後に無視します。途中の malformed record はその入力を失敗させます。
+- 複数入力では失敗した file を隔離して正常な file を続行し、いずれかが失敗すると非ゼロで終了します。`--strict` は fail-fast と不完全 tail の拒否を有効にします。
+- Embedded media extension を sanitize し、Base64 を検証します。decoded item は既定で 64 MiB に制限されます。
+- 大規模な materialized search は disk と memory を消費するため、`--search-only` を優先してください。
+- 生成 view は compile 時点の記録であり、現在の workspace や runtime 状態を証明しません。
+
+## CLI
+
+```text
+VCC.py INPUT [INPUT ...]
+  --grep REGEX       role-aware block を検索
+  --search-only      --grep 必須、view を書かず逐次検索
+  --cache-dir DIR    private managed cache root を override
+  --cache-policy P   valid cache を再利用、または強制 refresh
+  --strict           不完全な最終 record を拒否し、最初の入力 error で停止
+  --literal TEXT     1 つの literal string を検索
+  --term TEXT        literal anchor を追加、反復して --match で結合
+  --match all|any    multi-term query semantics
+  -i, --ignore-case  case-insensitive search
+  --format FORMAT    text、json、ndjson output
+  --max-matches-per-input N  input ごとに score 上位 N block を保持
+  --diagnostics      parser coverage、compaction boundary、unknown event type を出力
+  --max-media-bytes N  decoded media item の上限、0 は unlimited
+  --chain-window N  newest N chain のみ materialize、0 は all
+  --allow-unsafe-regex  conservative regex safety check を bypass
+  -o, --output-dir   指定ディレクトリへ export
+  -t N               assistant/tool の短縮上限（default: 128）
+  -tu N              user message の短縮上限（default: 256）
+```
+
+`--grep` は Python 正規表現です。通常文字列を検索するときは正規表現の特殊文字を escape してください。
+
+Source selection、exact current session、expansion、score、limit は `VCC.py history-search --help` を参照してください。
+
+`python benchmarks/benchmark_vcc.py` は search-only、latest-two materialization、cache-hit path の deterministic JSON benchmark を出力します。同じ machine/parameter で version を比較してください。
+
+## Citation
+
+```bibtex
+@article{zhang2026vcc,
+  title={View-oriented Conversation Compiler for Agent Trace Analysis},
+  author={Lvmin Zhang and Maneesh Agrawala},
+  year={2026}
+}
+```

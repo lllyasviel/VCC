@@ -1,0 +1,4 @@
+interface:
+  display_name: "Search Chat"
+  short_description: "Search local history across supported agent clients"
+  default_prompt: "Use $searchchat to find prior sessions about this topic and show the strongest evidence."
