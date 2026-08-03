@@ -101,7 +101,7 @@ VCC does not maintain a memory database or upload session content. It does creat
 - Explicit export: use `-o`; treat outputs as user-owned persistent artifacts.
 
 Cache entries are reproducible. Regenerate them after the source JSONL changes or VCC is upgraded, and delete old entries when they are no longer referenced.
-Valid full/brief cache entries are reused by default. Canonical source path, size, timestamps, file identity, truncation parameters, and the VCC version are part of the validity key; use `--cache-policy refresh` to force regeneration.
+Valid full/brief cache entries are reused by default. Canonical source path, size, timestamps, file identity, truncation parameters, and the VCC version are part of the validity key; Windows additionally verifies source SHA-256 because replacement can preserve file identity there. Use `--cache-policy refresh` to force regeneration.
 
 ## Structured search and ranking
 
@@ -171,6 +171,8 @@ Therefore one materialized file is linear in its content and output aside from p
 
 Persistent disk usage for one materialized file is `O(Lfull + Lbrief + Lview + M)`; across files it is the sum of those terms plus `O(F)` small cache metadata. `--search-only` uses `O(1)` persistent output space and does not decode embedded media.
 
+A valid-cache check is `O(1)` in source size on POSIX filesystems. On Windows it is `O(C)` time with `O(1)` extra memory because VCC streams the source through SHA-256 to detect replacements that preserve size, timestamps, and file identity.
+
 ## Token consumption
 
 Running `VCC.py` consumes **zero LLM/API tokens**: it is a local deterministic Python program. Tokens are consumed only when an agent reads the generated text or search stdout.
@@ -205,7 +207,7 @@ Prioritized follow-up work:
 2. Expand real-world schema fixtures, schema-drift checks, malformed-input tests, and fuzz coverage as client formats evolve.
 3. Add OS-independent regex execution isolation or hard timeouts; the current guard is deliberately conservative and `--allow-unsafe-regex` remains an explicit escape hatch.
 4. Track performance regressions over larger benchmark tiers, including peak RSS and long-running cache behavior.
-5. Add a high-integrity source-hash mode if timestamp/size/ctime validation is insufficient for a deployment.
+5. Add an optional cross-platform high-integrity source-hash mode for deployments whose filesystem does not provide reliable replacement identity; Windows hashing is already automatic.
 6. Consider an opt-in, privacy-preserving incremental content index only if measured workloads justify it. VCC will not duplicate raw conversation text into a permanent index by default.
 
 Future client schemas are not assumed compatible until covered by fixtures and tests. VCC does not upload session data or require a cloud service.

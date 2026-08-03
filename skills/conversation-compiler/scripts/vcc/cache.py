@@ -14,6 +14,17 @@ def canonical_source_path(input_path):
     return os.path.normcase(os.path.realpath(os.path.abspath(input_path)))
 
 
+def _source_sha256(input_path):
+    """Cover Windows replacement semantics that preserve stat file identity."""
+    if os.name != "nt":
+        return None
+    digest = hashlib.sha256()
+    with open(input_path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def default_cache_root():
     """Return the private per-user cache root without touching the filesystem."""
     if os.environ.get("VCC_CACHE_DIR"):
@@ -118,6 +129,7 @@ def write_cache_metadata(output_dir, input_path, truncate, truncate_user, grep_p
         "source_ctime_ns": st.st_ctime_ns,
         "source_dev": st.st_dev,
         "source_ino": st.st_ino,
+        "source_sha256": _source_sha256(input_path),
         "truncate": truncate,
         "truncate_user": truncate_user,
         "chain_window": chain_window,
@@ -175,6 +187,7 @@ def cache_is_valid(output_dir, input_path, truncate, truncate_user, chain_window
         "source_ctime_ns": st.st_ctime_ns,
         "source_dev": st.st_dev,
         "source_ino": st.st_ino,
+        "source_sha256": _source_sha256(input_path),
         "truncate": truncate,
         "truncate_user": truncate_user,
         "chain_window": chain_window,

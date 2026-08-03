@@ -259,6 +259,7 @@ class OutputPolicyTests(unittest.TestCase):
             self.assertIn("source_ctime_ns", metadata)
             self.assertIn("source_dev", metadata)
             self.assertIn("source_ino", metadata)
+            self.assertIn("source_sha256", metadata)
             self.assertEqual(metadata["diagnostics"]["client"], "claude")
             full = entry / "session.txt"
             first_mtime = full.stat().st_mtime_ns

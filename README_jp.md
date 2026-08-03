@@ -101,7 +101,7 @@ VCC は memory database を維持せず、セッションを upload しません
 - 明示的な export: `-o` を使い、永続的なユーザー成果物として扱う。
 
 Cache は再生成できます。入力 JSONL の更新や VCC の upgrade 後は再生成し、不要な entry は削除できます。
-有効な full/brief cache は既定で再利用します。canonical source path、size、timestamp、file identity、truncate parameter、VCC version が一致する場合だけ有効で、`--cache-policy refresh` で強制再生成できます。
+有効な full/brief cache は既定で再利用します。canonical source path、size、timestamp、file identity、truncate parameter、VCC version が一致する場合だけ有効です。Windows は replacement が identity を保持できるため source SHA-256 も検証します。`--cache-policy refresh` で強制再生成できます。
 
 ## Structured search と ranking
 
@@ -160,6 +160,8 @@ Regex pattern 依存の挙動を除き、materialized file 1 件は `O(C + B + L
 
 1 materialized file の persistent disk は `O(Lfull + Lbrief + Lview + M)` です。複数 file では各項の合計に `O(F)` の小さな metadata が加わります。`--search-only` の persistent output は `O(1)` で、埋め込み media を decode しません。
 
+Valid-cache check は POSIX filesystem では source size に対して `O(1)` です。Windows では size、timestamp、file identity を保持する replacement を検出するため source SHA-256 を streaming 計算し、`O(C)` time、`O(1)` extra memory です。
+
 ## Token 消費
 
 `VCC.py` の実行自体は **LLM/API token を 0** 消費します。ローカルの決定的 Python program であり、agent が view または stdout を読むときだけ model context token が消費されます。
@@ -194,7 +196,7 @@ Source JSONL が常に正本です。生成 view と cache は派生成果物で
 2. Client format の変化に合わせ、実際の schema fixture、schema-drift check、malformed-input test、fuzz coverage を拡充する。
 3. OS に依存しない regex execution isolation または hard timeout を追加する。現在の guard は意図的に保守的で、`--allow-unsafe-regex` は明示的な escape hatch です。
 4. より大きな benchmark tier、peak RSS、長時間の cache behavior で performance regression を追跡する。
-5. Deployment で size/mtime/ctime validation が不十分な場合に high-integrity source-hash mode を追加する。
+5. Reliable な replacement identity を提供しない filesystem 向けに optional cross-platform high-integrity hash mode を追加する。Windows hash は既に automatic です。
 6. 実測 workload が必要性を示した場合だけ、opt-in かつ privacy-preserving な incremental content index を検討する。既定では raw conversation text を permanent index に複製しません。
 
 将来の client schema は fixture と test で確認されるまで互換とはみなしません。VCC は session data を upload せず、cloud service に依存しません。

@@ -101,7 +101,7 @@ VCC 不维护记忆数据库，也不会上传会话内容；但实体化视图�
 - 用户明确导出：使用 `-o`，把输出视为用户持久产物。
 
 Cache 是可再生的。源 JSONL 变化或 VCC 升级后应重新生成；不再被引用的旧 cache 可以删除。
-有效的 full/brief cache 默认会被复用。规范化源路径、文件大小、时间戳、文件身份、截断参数以及 VCC 版本共同组成有效性条件；使用 `--cache-policy refresh` 可强制重新生成。
+有效的 full/brief cache 默认会被复用。规范化源路径、文件大小、时间戳、文件身份、截断参数以及 VCC 版本共同组成有效性条件；由于 Windows 的文件替换可能保留 identity，该平台还会校验源文件 SHA-256。使用 `--cache-policy refresh` 可强制重新生成。
 
 ## 结构化搜索与排序
 
@@ -171,6 +171,8 @@ Base64 图片和文档只在实体化视图时解码；`--search-only` 仅保留
 
 单个实体化文件的持久磁盘量为 `O(Lfull + Lbrief + Lview + M)`；多文件总量是上述各项逐文件求和，再加 `O(F)` 的小型 cache metadata。`--search-only` 的持久输出空间为 `O(1)`，且不会解码嵌入媒体。
 
+有效 cache 检查在 POSIX 文件系统上相对于源文件大小是 `O(1)`；Windows 上是 `O(C)` 时间、`O(1)` 额外内存，因为 VCC 会流式计算源文件 SHA-256，以识别 size、时间戳和文件身份均未变化的替换。
+
 ## Token 消耗
 
 执行 `VCC.py` 本身消耗 **0 个 LLM/API token**：它是本地确定性 Python 程序。只有 agent 读取生成文本或搜索 stdout 时，才会消耗模型上下文 token。
@@ -205,7 +207,7 @@ VCC 2.3.0 已适合个人工作流、本地团队使用和公开 beta 发布，�
 2. 随客户端格式演进，增加真实 schema fixture、schema drift 检查、坏输入测试和 fuzz 覆盖。
 3. 增加跨操作系统的正则执行隔离或硬超时；当前防护有意采取保守策略，`--allow-unsafe-regex` 仍是显式逃生口。
 4. 在更大 benchmark 档位持续跟踪性能回归，并记录 peak RSS 和长时间 cache 行为。
-5. 如果某些部署认为 size/mtime/ctime 校验不足，再增加高完整性的源文件 hash 模式。
+5. 为文件系统无法提供可靠替换 identity 的部署增加可选的跨平台高完整性 hash 模式；Windows 已自动启用 hash。
 6. 只有实测负载证明值得时，才考虑可选、隐私友好的增量内容索引。VCC 默认不会把原始会话文本复制进永久索引。
 
 未来客户端 schema 在被 fixture 和测试覆盖前，不视为自动兼容。VCC 不上传会话数据，也不依赖云服务。
