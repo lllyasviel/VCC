@@ -109,6 +109,8 @@ Cache 是可再生的。源 JSONL 变化或 VCC 升级后应重新生成；不�
 
 `history-search` 会枚举 Copilot、Codex 和 Claude 历史目录，先搜索显式传入的当前客户端，默认只在无命中或弱命中时扩展。当前客户端未知时会搜索全部来源并报告回退。`--current-session` 为上下文压缩恢复增加一个精确的第一层级。
 
+每条结构化命中都包含可用时取自原始事件的 `event_timestamp`，文本输出显示为 `event=...`。它表示命中消息或工具事件的时间，不自动等于实验开始或产物生成时间；需要区分时应继续检查相邻工具调用。会话路径中的日期只表示客户端归档或首次创建会话的位置，复用会话时可能与命中时间不同。
+
 Diagnostics schema v2 将源记录计数与规范化输出分开：`source_records_supported + source_records_ignored + source_records_unknown` 始终等于 `source_records_total`；一条源事件可能产生多条规范化记录，因此 `normalized_records_emitted` 可以不同。`recall_selection` 会直接给出压缩前和最新 brief view，使 agent 默认跳过更早 chain。
 
 Recall 应传入 `--chain-window 2`，只实体化选中的两个 chain。VCC 默认拒绝长度超过 4096 字符，以及常见嵌套无限重复／回溯引用风险正则；应优先使用 literal 或 term。`--allow-unsafe-regex` 只是可信输入的显式逃生口，不提供超时保证。
@@ -189,7 +191,7 @@ Base64 图片和文档只在实体化视图时解码；`--search-only` 仅保留
 
 ## 当前状态和后续方向
 
-VCC 2.3.0 已适合个人工作流、本地团队使用和公开 beta 发布，但定位不是集中式、多租户的会话历史服务。在当前已验证范围内，没有已知会阻塞发布的 P0/P1 问题。
+VCC 2.3.1 已适合个人工作流、本地团队使用和公开 beta 发布，但定位不是集中式、多租户的会话历史服务。在当前已验证范围内，没有已知会阻塞发布的 P0/P1 问题。
 
 当前版本的验证依据包括：
 

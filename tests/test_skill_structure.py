@@ -48,7 +48,7 @@ class SkillStructureTests(unittest.TestCase):
         for filename, (heading, roadmap_marker) in markers.items():
             text = (ROOT / filename).read_text(encoding="utf-8")
             self.assertIn(heading, text, filename)
-            self.assertIn("VCC 2.3.0", text, filename)
+            self.assertIn("VCC 2.3.1", text, filename)
             self.assertIn(roadmap_marker, text, filename)
 
     def test_entry_skills_use_portable_sibling_runtime_reference(self):

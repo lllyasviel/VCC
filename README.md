@@ -109,6 +109,8 @@ Use `--literal` for one exact literal string, repeated `--term` with `--match al
 
 `history-search` enumerates Copilot, Codex, and Claude roots, searches the explicitly supplied current client first, and expands only on no/weak matches unless scope or expansion is overridden. If the current client is unknown, it searches all sources and reports that fallback. `--current-session` adds an exact first tier for compaction recovery.
 
+Each structured match includes `event_timestamp`, taken from the matched source event when available. Text output labels it as `event=...`. Treat this as the time of the matching message or tool event, not automatically as the time an experiment started or an artifact was produced; inspect adjacent tool calls when that distinction matters. Dates embedded in session paths identify where a client archived or first created the session and may differ from the matching event time when a session is reused.
+
 Diagnostics schema v2 separates source accounting from normalized output. `source_records_supported + source_records_ignored + source_records_unknown` always equals `source_records_total`; `normalized_records_emitted` may differ because one source event can emit multiple normalized records. `recall_selection` identifies the pre-compaction and latest brief views so an agent can skip older chains by default.
 
 For recall, pass `--chain-window 2` to materialize only the two selected chains. VCC rejects regexes longer than 4096 characters and common nested-unbounded-repeat/backreference patterns by default; use literal or term queries whenever possible. `--allow-unsafe-regex` is an explicit trusted-input escape hatch, not a timeout guarantee.
@@ -189,7 +191,7 @@ For lowest agent token use: run `--search-only`, materialize only selected sessi
 
 ## Current status and roadmap
 
-VCC 2.3.0 is ready for personal workflows, local team use, and a public beta. It is not intended to be a centralized, multi-tenant conversation-history service. Within the currently validated scope, there are no known release-blocking P0/P1 issues.
+VCC 2.3.1 is ready for personal workflows, local team use, and a public beta. It is not intended to be a centralized, multi-tenant conversation-history service. Within the currently validated scope, there are no known release-blocking P0/P1 issues.
 
 Current release evidence includes:
 

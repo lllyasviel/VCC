@@ -112,9 +112,12 @@ def emit(report, output_format):
     print(f"tiers searched: {', '.join(report['tiers_searched']) or 'none'}")
     print(f"expansion: {report['expansion_reason'] or 'not needed'}")
     for result in report["results"]:
+        event = result.get("event_timestamp")
+        event_text = f" event={event}" if event else ""
         print(
             f"[{result['client']}] score={result['score']} {result['source']} "
             f"{result['role']}:{result['line_start']}-{result['line_end']}"
+            f"{event_text}"
         )
         for line in result["lines"]:
             print(f"  {line['line']}: {line['text']}")

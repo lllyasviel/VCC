@@ -109,6 +109,8 @@ Cache は再生成できます。入力 JSONL の更新や VCC の upgrade 後�
 
 `history-search` は Copilot、Codex、Claude root を列挙し、明示された current client を最初に検索し、no/weak match の場合だけ既定で拡張します。current client が不明なら全 source fallback を報告します。`--current-session` は compaction recovery 用の exact first tier です。
 
+各 structured match は、利用可能な場合に source event 由来の `event_timestamp` を含み、text output では `event=...` と表示します。これは一致した message または tool event の時刻であり、実験開始時刻や artifact 生成時刻を自動的に意味しません。その区別が必要なら隣接する tool call を確認してください。session path 内の日付は client が session を archive または最初に作成した場所を示すだけで、session 再利用時には match 時刻と異なる場合があります。
+
 Diagnostics schema v2 は source accounting と normalized output を分離します。`source_records_supported + source_records_ignored + source_records_unknown` は常に `source_records_total` と一致し、1 source event が複数 record を生成できるため `normalized_records_emitted` は異なる場合があります。`recall_selection` は pre-compaction と latest brief view を直接示します。
 
 Recall では `--chain-window 2` を渡し、選択された 2 chain だけを materialize します。VCC は 4096 文字超と一般的な nested unbounded repeat/backreference regex を既定で拒否します。literal/term を優先し、`--allow-unsafe-regex` は trusted input 用の明示 override としてだけ使用します。
@@ -178,7 +180,7 @@ Token を最小化するには、`--search-only` → 選択 session だけ mater
 
 ## 現在の状態とロードマップ
 
-VCC 2.3.0 は個人 workflow、local team での利用、public beta に利用できる状態です。ただし、集中型 multi-tenant conversation-history service を目的としていません。現在検証済みの範囲では、release を妨げる既知の P0/P1 issue はありません。
+VCC 2.3.1 は個人 workflow、local team での利用、public beta に利用できる状態です。ただし、集中型 multi-tenant conversation-history service を目的としていません。現在検証済みの範囲では、release を妨げる既知の P0/P1 issue はありません。
 
 現在の release 根拠：
 
