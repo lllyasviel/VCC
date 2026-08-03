@@ -255,7 +255,7 @@ class OutputPolicyTests(unittest.TestCase):
             self.assertEqual(first.returncode, 0, first.stderr)
             entry = next(Path(cache).iterdir())
             metadata = json.loads((entry / "metadata.json").read_text(encoding="utf-8"))
-            self.assertEqual(metadata["vcc_version"], "2.3.0")
+            self.assertEqual(metadata["vcc_version"], "2.3.1")
             self.assertIn("source_ctime_ns", metadata)
             self.assertIn("source_dev", metadata)
             self.assertIn("source_ino", metadata)
@@ -621,6 +621,36 @@ class OutputPolicyTests(unittest.TestCase):
             matches = [json.loads(line) for line in all_terms.stdout.splitlines()]
             self.assertTrue(all(len(match["matched_patterns"]) == 2 for match in matches))
             self.assertGreaterEqual(max(match["score"] for match in matches), 14)
+
+    def test_search_results_report_matching_event_timestamp(self):
+        fixtures = (
+            ("codex-compacted.jsonl", "latest-window", "2026-01-01T00:00:08Z"),
+            ("claude-compacted.jsonl", "claude-after", "2026-01-01T00:00:03Z"),
+            ("copilot-events.jsonl", "copilot-after", "2026-01-01T00:00:03Z"),
+        )
+        for fixture, marker, expected in fixtures:
+            with self.subTest(fixture=fixture):
+                result = self.run_vcc(
+                    str(FIXTURES / fixture), "--literal", marker,
+                    "--search-only", "--format", "json",
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                matches = json.loads(result.stdout)
+                self.assertTrue(matches)
+                self.assertEqual(matches[0]["event_timestamp"], expected)
+
+    def test_search_result_without_timestamp_is_explicitly_null(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "undated.jsonl"
+            write_session(source, "undated-marker")
+            result = self.run_vcc(
+                str(source), "--literal", "undated-marker",
+                "--search-only", "--format", "json",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            matches = json.loads(result.stdout)
+            self.assertTrue(matches)
+            self.assertIsNone(matches[0]["event_timestamp"])
 
     def test_regex_resource_guard_is_conservative_and_overridable(self):
         with tempfile.TemporaryDirectory() as td:

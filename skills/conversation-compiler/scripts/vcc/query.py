@@ -33,6 +33,11 @@ def collect_search_matches(results, patterns, match_mode="any"):
     for result in reversed(results):
         filepath, ir, source_path = result
         short = _rel_path(filepath)
+        section_timestamps = {
+            node.get("_sec"): node.get("_event_timestamp")
+            for node in ir
+            if node.get("type") == "meta_header"
+        }
         for o in reversed(ir):
             if not o["searchable"]:
                 continue
@@ -51,6 +56,7 @@ def collect_search_matches(results, patterns, match_mode="any"):
                 "source": os.path.abspath(source_path),
                 "reference": short,
                 "role": role,
+                "event_timestamp": section_timestamps.get(o.get("_sec")),
                 "line_start": start,
                 "line_end": end,
                 "matched_patterns": [pattern.pattern for pattern in hits],
@@ -91,9 +97,11 @@ def emit_search_results(results, patterns, match_mode="any", output_format="text
     for index, match in enumerate(matches):
         if index:
             print()
+        event = match.get("event_timestamp")
+        suffix = f" event={event}" if event else ""
         print(
             f"({match['reference']}:{match['line_start']}-{match['line_end']}) "
-            f"[{match['role']}]"
+            f"[{match['role']}]{suffix}"
         )
         for line in match["lines"]:
             print(f"  {line['line']}: {line['text']}")

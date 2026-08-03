@@ -425,6 +425,7 @@ def build_ir(chain, outdir, data_prefix, data_ctr, extract_media=True,
         raise VCCError("materialized parsing requires a media writer")
     sec = 0
     blk = 0
+    active_timestamp = None
 
     tid_name = {}
     for r in chain:
@@ -438,7 +439,10 @@ def build_ir(chain, outdir, data_prefix, data_ctr, extract_media=True,
             ir.append(_node("meta", ["", SEP]))
 
     def _emit_header(h):
-        ir.append(_node("meta_header", [h, ""], _sec=sec))
+        ir.append(_node(
+            "meta_header", [h, ""], _sec=sec,
+            _event_timestamp=active_timestamp,
+        ))
 
     def _emit_blocks(blocks, text_type):
         nonlocal blk
@@ -509,6 +513,7 @@ def build_ir(chain, outdir, data_prefix, data_ctr, extract_media=True,
         return has_any
 
     for r in chain:
+        active_timestamp = r.get("timestamp")
         rt = r.get("type")
 
         if rt == "system":

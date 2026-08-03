@@ -36,6 +36,8 @@ Run deterministic history discovery through the same entry point:
 python "<VCC.py>" history-search "<query>" --current-client codex --format json
 ```
 
+Use each result's `event_timestamp` as the matching message or tool-event time. Do not infer event time from a dated session path, and do not call `event_timestamp` an experiment start time without confirming the adjacent execution record.
+
 Pass the actual runtime client explicitly when known. Use `--current-session <jsonl>` for current-session compaction recovery. Do not infer the current client merely from an existing history directory.
 
 ## Inspect outputs
