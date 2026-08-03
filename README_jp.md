@@ -101,7 +101,7 @@ VCC は memory database を維持せず、セッションを upload しません
 - 明示的な export: `-o` を使い、永続的なユーザー成果物として扱う。
 
 Cache は再生成できます。入力 JSONL の更新や VCC の upgrade 後は再生成し、不要な entry は削除できます。
-有効な full/brief cache は既定で再利用します。source size/mtime/ctime、truncate parameter、VCC version が一致する場合だけ有効で、`--cache-policy refresh` で強制再生成できます。
+有効な full/brief cache は既定で再利用します。canonical source path、size、timestamp、file identity、truncate parameter、VCC version が一致する場合だけ有効で、`--cache-policy refresh` で強制再生成できます。
 
 ## Structured search と ranking
 

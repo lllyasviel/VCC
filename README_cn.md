@@ -101,7 +101,7 @@ VCC 不维护记忆数据库，也不会上传会话内容；但实体化视图�
 - 用户明确导出：使用 `-o`，把输出视为用户持久产物。
 
 Cache 是可再生的。源 JSONL 变化或 VCC 升级后应重新生成；不再被引用的旧 cache 可以删除。
-有效的 full/brief cache 默认会被复用。源文件大小、mtime、ctime、截断参数以及 VCC 版本共同组成有效性条件；使用 `--cache-policy refresh` 可强制重新生成。
+有效的 full/brief cache 默认会被复用。规范化源路径、文件大小、时间戳、文件身份、截断参数以及 VCC 版本共同组成有效性条件；使用 `--cache-policy refresh` 可强制重新生成。
 
 ## 结构化搜索与排序
 

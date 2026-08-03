@@ -242,7 +242,10 @@ class OutputPolicyTests(unittest.TestCase):
                 if os.name == "posix":
                     mode = stat.S_IMODE((entry / "events.txt").stat().st_mode)
                     self.assertEqual(mode, 0o600)
-            self.assertEqual(sources, {str(first.resolve()), str(second.resolve())})
+            self.assertEqual(sources, {
+                os.path.normcase(str(first.resolve())),
+                os.path.normcase(str(second.resolve())),
+            })
 
     def test_cache_reuse_is_versioned_and_invalidates_on_source_change(self):
         with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as cache:
@@ -254,6 +257,8 @@ class OutputPolicyTests(unittest.TestCase):
             metadata = json.loads((entry / "metadata.json").read_text(encoding="utf-8"))
             self.assertEqual(metadata["vcc_version"], "2.3.0")
             self.assertIn("source_ctime_ns", metadata)
+            self.assertIn("source_dev", metadata)
+            self.assertIn("source_ino", metadata)
             self.assertEqual(metadata["diagnostics"]["client"], "claude")
             full = entry / "session.txt"
             first_mtime = full.stat().st_mtime_ns

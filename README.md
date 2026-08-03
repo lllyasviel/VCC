@@ -101,7 +101,7 @@ VCC does not maintain a memory database or upload session content. It does creat
 - Explicit export: use `-o`; treat outputs as user-owned persistent artifacts.
 
 Cache entries are reproducible. Regenerate them after the source JSONL changes or VCC is upgraded, and delete old entries when they are no longer referenced.
-Valid full/brief cache entries are reused by default. Source size/mtime/ctime, truncation parameters, and the VCC version are part of the validity key; use `--cache-policy refresh` to force regeneration.
+Valid full/brief cache entries are reused by default. Canonical source path, size, timestamps, file identity, truncation parameters, and the VCC version are part of the validity key; use `--cache-policy refresh` to force regeneration.
 
 ## Structured search and ranking
 
