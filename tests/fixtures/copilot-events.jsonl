@@ -1,0 +1,4 @@
+{"type":"user.message","timestamp":"2026-01-01T00:00:00Z","data":{"content":"copilot-before"}}
+{"type":"assistant.streaming_delta","timestamp":"2026-01-01T00:00:01Z","ephemeral":true,"data":{"content":"partial"}}
+{"type":"session.compaction_complete","timestamp":"2026-01-01T00:00:02Z","data":{"success":true,"summaryContent":"copilot-summary"}}
+{"type":"assistant.message","timestamp":"2026-01-01T00:00:03Z","data":{"content":"copilot-after"}}

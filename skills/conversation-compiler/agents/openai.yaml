@@ -1,0 +1,4 @@
+interface:
+  display_name: "Conversation Compiler"
+  short_description: "Compile agent session logs into useful text views"
+  default_prompt: "Use $conversation-compiler to compile this session JSONL and inspect its generated views."

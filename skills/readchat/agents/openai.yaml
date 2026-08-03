@@ -1,0 +1,4 @@
+interface:
+  display_name: "Read Chat"
+  short_description: "Review one known agent session from its JSONL log"
+  default_prompt: "Use $readchat to inspect this session log and recover the relevant details."

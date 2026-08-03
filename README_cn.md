@@ -1,286 +1,265 @@
 # VCC: View-oriented Conversation Compiler
 
-（本文档由 Claude Code 翻译并经人工审核）
-
 [English](README.md) | [简体中文](README_cn.md) | [日本語](README_jp.md)
 
-"View-oriented Conversation Compiler for Agent Trace Analysis" 的官方实现 ([论文](https://arxiv.org/abs/2603.29678))
+VCC 将本地 agent 会话 JSONL 编译成易读、可搜索的视图，并提供稳定的 block 角色和行号范围引用。目前支持 GitHub Copilot CLI、Codex 和 Claude Code，可自动识别输入格式。
 
-这个 repo 是日常使用的。要复现论文里的学术实验请看 [VCC-experiments](https://github.com/lllyasviel/VCC-experiments)。
+VCC 是论文 “View-oriented Conversation Compiler for Agent Trace Analysis” 的配套实现（[论文](https://arxiv.org/abs/2603.29678)）。学术复现实验位于 [VCC-experiments](https://github.com/lllyasviel/VCC-experiments)。
 
-VCC 是一个编译器，把你的对话日志 (Claude Code 的 JSONL) 编译成高效的、agent 友好的视图。装了之后你就再也不怕 Claude Code 的 `/compact` 了 - CC 终于能看到被 compact 掉的上下文的原始细节。也支持搜索你所有的 Claude Code 历史对话。
+## 支持的客户端
 
-装完 VCC 之后一般会发生这些事情:
+| 客户端 | 常见本地输入 | 归一化内容 |
+|---|---|---|
+| GitHub Copilot CLI | `${COPILOT_HOME:-$HOME/.copilot}/session-state/*/events.jsonl` | 消息、reasoning、工具、结果、compaction |
+| Codex | `${CODEX_HOME:-$HOME/.codex}/sessions/YYYY/MM/DD/rollout-*.jsonl` | 消息及 function/custom tool 事件 |
+| Claude Code | `$HOME/.claude/projects/**/*.jsonl` | 消息、thinking、工具、结果、compaction |
 
-- 你发现如果早点装这个的话，可以省下好多因为跟 CC 的 `/compact` 较劲而浪费掉的钱。
-- `/compact` + `/recall` 变成你最喜欢的组合技。
-- 你开始想为什么 CC 不自带这个功能。
-- 你删掉了你的多层 RAG 记忆系统、你的自进化 agent 技能记忆、还有另外 15 个 AGI 发明 - 如果你真有这些东西的话...
+原始 JSONL 始终是权威数据。生成视图是可再生派生数据；如果活跃会话继续追加，旧视图就会过期。
 
-另外还有一篇[论文](https://arxiv.org/abs/2603.29678)证明 VCC 在某个学术 benchmark 上能提升 context learning 和 agent trace 分析和 harness 设计。
+### 默认来源优先级
 
-# 安装
+`searchchat` 和 `recall` 不会无条件同时搜索三个客户端：
 
-目前只支持 Claude Code。Codex 和 OpenClaw 快了。
+1. 用户明确指定的客户端或客户端集合优先级最高。
+2. 用户明确要求全局或跨平台搜索时，直接搜索所有存在的来源。
+3. 其他情况下，先搜索当前运行该 skill 的 agent 客户端历史。
+4. 只有当前来源没有可靠命中、命中含糊或不可用时，才扩展到其他客户端。
+5. 如果无法从运行时上下文可靠识别当前客户端，则回退为搜索所有存在的来源，并明确说明该回退。
 
-安装的话，把这段话复制粘贴到你的 Claude Code 里:
+仅凭某个目录存在不能判断当前 agent。搜索结果会说明使用了哪个层级和哪些根目录。
 
-    Please help me install the skills from
-    https://github.com/lllyasviel/VCC.git
-    just clone it then follow the INSTALL.md
+## 四个配套 skill
 
-更新的话:
+四个目录必须一起安装：
 
-    Please help me update the skills from
-    https://github.com/lllyasviel/VCC.git
-    just clone it then follow the INSTALL.md
+| Skill | 用途 |
+|---|---|
+| `conversation-compiler` | 直接编译已知 JSONL 并检查产物 |
+| `readchat` | 用精确 transcript 证据审查一个已知会话 |
+| `searchchat` | 跨本地历史发现会话，不为每个候选生成文件 |
+| `recall` | 恢复历史决策，并与当前工作区状态核对 |
 
-卸载的话:
+客户端安装位置和验证方法见 [INSTALL.md](INSTALL.md)。
 
-    Please help me uninstall VCC skills by deleting
-    `conversation-compiler`, `readchat`, `recall`, `searchchat`
-    from my `.claude/skills`
+## 快速开始
 
-安装、更新、卸载后都要重启 Claude Code。
+编译单个会话，并把视图写入 VCC 私有 managed cache：
 
-# 基本用法
-
-当 compact 触发的时候 (不管是自动还是手动)，你可以马上 `/recall`。
-
-比如说，自动 compact 或者手动 `/compact` 之后，你会看到类似 `(... compacted)` 这样的东西。然后:
-
-`/recall`
-
-CC 会自动回忆所有内容，或者你可以
-
-`/recall 我们回顾一下刚才的对话`
-
-`/recall 刚才那六轮分析里面，哪次访问尝试导致了服务器三层日志的第二层崩溃？`
-
-`/recall 把我刚才提到的关于用户调研的六个细节再过一遍`
-
-`/recall 回顾一下我到目前为止的思路`
-
-对于新对话，你可以用 `/searchchat` 或者 `/recall` (会自动 fallback 到搜索)。比如:
-
-`/searchchat 上次我们讨论的那个浏览器监听系统里面验证码是怎么处理的？`
-
-`/recall 上次讨论的那个 canvas 方案我们最后决定用 React 了吗？`
-
-这些命令可以跨越几个月的对话历史找到并恢复原始聊天内容。
-
-`/readchat` 是高级用法，看下面。
-
-# 原理
-
-一个 Claude Code 的 JSONL 长这样 (在你的 `~/.claude/projects` 里可以找到一堆这种东西):
-
-```
-{"type":"user","message":{"id":"msg_user1","content":"I have two pets.\nCan you write a P..."}}
-{"type":"assistant","message":{"id":"msg_asst1","content":[{"type":"thinking","thinking":"The
-user wants a pet tracking module.\nThey have a dog (Buddy) and a cat (Whiskers).\nLet me chec
-k if there's an existing file first...
+```bash
+python "skills/conversation-compiler/scripts/VCC.py" "path/to/session.jsonl"
 ```
 
-会被编译成这些视图:
+批量搜索但不写入 transcript：
 
-## UI View
-
-模拟用户在 CC 里实际看到的东西
-
-```
-[user]
-
-I have two pets.
-Can you write a Python module for tracking them?
-One is a dog named Buddy and a cat named Whiskers.
-
-[assistant]
-
-Sure! Let me check if there's an existing file.
-
-* Read "src/pets.py" (example.txt:18-20,23-25)
-
-No existing file.
-I'll create a module with Dog and Cat classes.
-
-* Write "src/pets.py" (example.txt:40-63,66-68)
-
-Created src/pets.py.
+```bash
+python "skills/conversation-compiler/scripts/VCC.py" "path/to/**/*.jsonl" \
+  --grep "literal-or-regex" --search-only
 ```
 
-像 `(example.txt:18-20,23-25)` 这样的指针可以跳到下面 full view 里对应的具体行。
+自动化调用应优先使用明确的查询语义和结构化输出：
 
-## Full View
-
-完整的转录。行号只分配一次，所有视图共享。
-
-假设这是 `example.txt`:
-
-```
-  1  [user]
-  2
-  3  I have two pets.
-  4  Can you write a Python module for tracking them?
-  5  One is a dog named Buddy and a cat named Whiskers.
-  6
-  7  ══════════════════════════════
-  8  [assistant]
-  9
- 10  >>>thinking
- 11  The user wants a pet tracking module.
- 12  They have a dog (Buddy) and a cat (Whiskers).
- 13  Let me check if there's an existing file first.
- 14  <<<thinking
- 15
- 16  Sure! Let me check if there's an existing file.
- 17
- 18  >>>tool_call Read:tu01
- 19  file_path: src/pets.py
- 20  <<<tool_call
- 21
- 22  ══════════════════════════════
- 23  [tool_error] Read:tu01
- 24
- 25  Error: file not found src/pets.py
- 26
- 27  ══════════════════════════════
- 28  [assistant]
- 29
- 30  >>>thinking
- 31  No existing file.
- 32  I'll create Dog and Cat subclasses.
- 33  The dog needs walk tracking.
- 34  The cat needs nap tracking.
- 35  <<<thinking
- 36
- 37  No existing file.
- 38  I'll create a module with Dog and Cat classes.
- 39
- 40  >>>tool_call Write:tu02
- 41  file_path: src/pets.py
- 42  content: |
- 43    class Pet:
- 44        def __init__(self, name, species):
- 45            self.name = name
- 46            self.species = species
- 47
- 48    class Dog(Pet):
- 49        def __init__(self, name):
- 50            super().__init__(name, 'dog')
- 51            self.walks = []
- 52
- 53        def log_walk(self, duration, distance):
- 54            self.walks.append({'min': duration, 'km': distance})
- 55
- 56    class Cat(Pet):
- 57        def __init__(self, name):
- 58            super().__init__(name, 'cat')
- 59            self.naps = []
- 60
- 61        def log_nap(self, duration, spot):
- 62            self.naps.append({'min': duration, 'spot': spot})
- 63  <<<tool_call
- 64
- 65  ══════════════════════════════
- 66  [tool] Write:tu02
- 67
- 68  File written successfully.
- 69
- 70  ══════════════════════════════
- 71  [assistant]
- 72
- 73  Created src/pets.py.
+```bash
+python "skills/conversation-compiler/scripts/VCC.py" "path/to/**/*.jsonl" \
+  --term VCC --term cache --match all --ignore-case --format ndjson --search-only
 ```
 
-## Adaptive View `--grep dog`
+按照当前客户端优先级确定性搜索本地历史：
 
-这个视图可以适配搜索查询比如 `--grep dog`。只有包含匹配的 block 会显示，但是对话结构会保留。每个 block 都有指回 full view 的指针。
-
-```
-[user]
-
-(example.txt:3-5)
-  5: One is a dog named Buddy and a cat named Whiskers.
-
-══════════════════════════════
-[assistant]
-
->>>thinking
-(example.txt:11-13)
-  12: They have a dog (Buddy) and a cat (Whiskers).
-<<<thinking
-
-══════════════════════════════
-[assistant]
-
->>>thinking
-(example.txt:31-34)
-  33: The dog needs walk tracking.
-<<<thinking
-
->>>tool_call Write:tu02
-(example.txt:41-62)
-  50:           super().__init__(name, 'dog')
-<<<tool_call
+```bash
+python "skills/conversation-compiler/scripts/VCC.py" history-search "VCC cache" \
+  --current-client codex --format json
 ```
 
-`Write:tu02` 有 22 行代码 (41-62)，但是只有第 50 行 (`'dog'`) 匹配了: Cat 类 (56-62) 不在里面。指针 `41-62` 告诉 agent 去哪里读完整的 block。
+只把选中的会话保存到私有 cache：
 
-## Transposed View `--grep dog`
-
-同样的匹配结果，但是是一个平铺的列表。每个条目标记了它是什么 (用户消息、thinking、tool call 之类的) 以及在 full view 里的位置:
-
-```
-(example.txt:3-5) [user]
-  5: One is a dog named Buddy and a cat named Whiskers.
-
-(example.txt:11-13) [thinking]
-  12: They have a dog (Buddy) and a cat (Whiskers).
-
-(example.txt:31-34) [thinking]
-  33: The dog needs walk tracking.
-
-(example.txt:41-62) [tool_call]
-  50:           super().__init__(name, 'dog')
+```bash
+python "skills/conversation-compiler/scripts/VCC.py" "path/to/selected.jsonl" \
+  --grep "literal-or-regex"
 ```
 
-Adaptive view 保持对话顺序所以适合理解匹配周围的上下文。Transposed view 是平铺列表所以适合快速扫一遍所有匹配。所有指针都指向 full view。
+未使用 `-o` 时，VCC 依次选择 `${VCC_CACHE_DIR}`、`${XDG_CACHE_HOME}/vcc`、Windows 本地应用数据 cache 或 `~/.cache/vcc`。`--cache-dir` 只用于覆盖这个私有位置。只有用户明确要求导出时才使用 `-o <dir>`；共享导出目录会在写入前拒绝同 stem 输入。
 
-# Q&A
+## 输出视图
 
-### "又一个 agent 记忆系统？"
+| 产物 | 生成条件 | 用途 |
+|---|---|---|
+| `.txt` | 实体化编译 | 高保真语义视图，也是行号引用目标 |
+| `.min.txt` | 实体化编译 | 按时间顺序的简版视图，工具调用折叠为引用 |
+| `.view.txt` | 实体化编译并使用 `--grep` | 保留对话结构的匹配 block |
+| stdout 匹配 | `--grep` | 逆时间顺序、带角色标签的匹配列表 |
+| `metadata.json` | managed cache | 源路径、大小、时间戳、生成参数和产物 hash |
 
-不是。记忆系统存的是预计算好的东西比如 summary、embedding、graph 之类的。那些结构和层级一般是静态的。而且大部分都在调 LLM 做摘要什么的...
+`--search-only` 不写入任何上述文件。输出中的 `::rendered` 行号只是发现阶段的虚拟引用；在引用或打开精确范围前，应重新实体化选中的会话。
 
-VCC 不存任何东西。视图是动态的。它们从原始 JSONL 实时计算出来，用完就扔。(我们管这个叫 "projection"。)
+## 生命周期策略
 
-### "那这不就是 grep 吗？"
+VCC 不维护记忆数据库，也不会上传会话内容；但实体化视图时会创建本地派生文件。
 
-完全不是。Grep 给你匹配的行，但是你分不清一个匹配到底是用户在说话、agent 在思考、tool call、还是 tool result。VCC 有 **block range pointers** 和 **block roles**。
+- 显式编译：默认使用私有 managed cache，绝不修改源会话目录。
+- `readchat` / `recall`：复用选中会话的 cache，以支持连续追问。
+- 大范围 `searchchat`：使用 `--search-only`，不保留未命中的候选。
+- 用户明确导出：使用 `-o`，把输出视为用户持久产物。
 
-有些人可能会追问 *"那把聊天日志拆成一个个消息文件然后用文件系统 grep 呢？structured grep 呢？我的 XXXX 数据库系统呢？"*
+Cache 是可再生的。源 JSONL 变化或 VCC 升级后应重新生成；不再被引用的旧 cache 可以删除。
+有效的 full/brief cache 默认会被复用。源文件大小、mtime、ctime、截断参数以及 VCC 版本共同组成有效性条件；使用 `--cache-policy refresh` 可强制重新生成。
 
-假设你从 adaptive view 跳到 full view 的某个 block 行号，周围的上下文就在那里。要从 file-per-message 的拆分里得到同样的效果，你需要一棵树来追踪层级关系，然后用一个链表来追踪时间顺序，两个都要维护，而且你还要决定多少个 "时间上相邻的" 东西才是真正正确的上下文。等你终于终于搞定的时候你基本上重新实现了一遍 VCC..
+## 结构化搜索与排序
 
-### "那这不就是 pretty-print 吗？"
+单个精确文本使用 `--literal`；多锚点查询重复使用 `--term` 并通过 `--match all|any` 指定语义；只有真正需要正则时才使用 `--grep`。`--format json|ndjson` 会输出带 schema 版本的 block 记录，包括来源、角色、full-view 范围、命中 pattern、命中行和确定性相关度分数。用户和 assistant 命中高于无上下文的工具输出；排序只用于选择候选，不能替代证据核验。
 
-它们非常不一样。Pretty-print 只是重新排版文本。VCC 是一个真正的编译器，有 lex, parse, IR, lower, emit。举几个例子:
+`history-search` 会枚举 Copilot、Codex 和 Claude 历史目录，先搜索显式传入的当前客户端，默认只在无命中或弱命中时扩展。当前客户端未知时会搜索全部来源并报告回退。`--current-session` 为上下文压缩恢复增加一个精确的第一层级。
 
-* Lexer 在 parse 之前就把 `queue-operation`, `progress`, `api_error` 这种垃圾记录丢掉了
-* Parser 把 tool call 参数从转义的 JSON blob 变成可读的缩进文本
-* Parser 还会把 Read tool 返回结果里的 `数字→` 前缀去掉来还原原始源码，也会把 base64 图片解码成文件
-* 到 IR 阶段，被 compaction 分裂的 assistant 消息 (同一个 ID 但是多条 JSONL 记录) 会被重组成一个 section
-* Lowering 会去掉 harness 注入的 XML (`<system-reminder>`, `<ide_opened_file>` 之类的)，过滤内部工具 (`TodoWrite`, `ToolSearch`)，清理 ANSI 转义码，隐藏纯 markup 的用户 turn
-* Emitter 产出三个视图，共享一套行号坐标系
+Diagnostics schema v2 将源记录计数与规范化输出分开：`source_records_supported + source_records_ignored + source_records_unknown` 始终等于 `source_records_total`；一条源事件可能产生多条规范化记录，因此 `normalized_records_emitted` 可以不同。`recall_selection` 会直接给出压缩前和最新 brief view，使 agent 默认跳过更早 chain。
 
-IR 阶段一次性分配行号来保证一切是一致的。之后 lowering 只能选择、截断、标注。行号不能重排或重新编号。所以跨视图的指针永远是一致的。
+Recall 应传入 `--chain-window 2`，只实体化选中的两个 chain。VCC 默认拒绝长度超过 4096 字符，以及常见嵌套无限重复／回溯引用风险正则；应优先使用 literal 或 term。`--allow-unsafe-regex` 只是可信输入的显式逃生口，不提供超时保证。
 
-# Cite
+## 为什么不只是 grep
 
-    @article{zhang2026vcc,
-      title={View-oriented Conversation Compiler for Agent Trace Analysis},
-      author={Lvmin Zhang and Maneesh Agrawala},
-      year={2026},
-      url={https://github.com/lllyasviel/VCC}
-    }
+VCC 会识别输入格式，将其归一化成统一会话模型，解析带角色的 block，分配稳定的 full-view 行号坐标，再生成 full、brief 和 focused 视图。因此搜索结果能区分用户消息、assistant 输出、reasoning、工具输入和工具结果，并提供用于回读上下文的完整 block 范围。
+
+## 实现原理和算法
+
+VCC 对每个输入文件执行确定性流水线：
+
+1. **Lex**：逐行读取 JSONL，并识别 Copilot、Codex 或 Claude 格式。
+2. **Normalize**：把客户端特有的消息和工具事件转换为统一 record。
+3. **Merge / split**：合并流式 assistant chunk，并按 compaction boundary 拆分 chain。
+4. **Parse**：把消息、reasoning、工具、结果和媒体引用解析成中间表示（IR）。
+5. **Assign lines**：只在 full IR 上分配一次行号，使所有派生视图共享同一坐标。
+6. **Lower**：在不改变 full-view 行号的前提下生成 brief 和 focused 选择。
+7. **Emit**：写出实体文件，或者流式输出 search-only 匹配。
+
+可执行入口保持极薄，实际实现位于 `scripts/vcc/`，依赖方向保持单向：
+
+| 模块 | 职责 |
+|---|---|
+| `common.py` | 共享版本、限制、错误类型和文本工具 |
+| `normalizers.py` | Codex 和 GitHub Copilot 客户端专用 schema adapter |
+| `parser.py` | 客户端识别、JSONL 校验、chain 处理、媒体处理、诊断和 IR 构建 |
+| `renderer.py` | 稳定行号分配，以及 full、brief、focused 视图 lowering |
+| `query.py` | Block 匹配、确定性评分、按来源限额和 text/JSON/NDJSON 输出 |
+| `cache.py` | 原子写入、cache key、manifest、完整性校验、清理和权限 |
+| `compiler.py` | 连接 parser、renderer 和存储的单会话应用流水线 |
+| `cli.py` | 参数校验、glob 展开、多输入隔离、cache 策略和退出状态 |
+
+`scripts/VCC.py` 只负责可执行环境和分派到 `vcc.cli`；`history_search.py` 仍是独立的历史发现服务，通过同一个公开 CLI 协议调用编译器。内部模块不依赖入口文件，parser、renderer 和 query 也不依赖 CLI 策略。
+
+Base64 图片和文档只在实体化视图时解码；`--search-only` 仅保留占位符，不解码媒体。工具调用与结果通过 tool ID 关联。Full view 是 VCC 行号引用的目标，但对于不支持或主动省略的事件，原始 JSONL 仍是权威数据。
+
+## 时间和空间复杂度
+
+对单个文件定义：
+
+- `C`：解码后的文本和 JSON 内容大小；
+- `R`：JSONL record 数量；
+- `B`：IR node/section 数量；
+- `L`：渲染输出大小；
+- `M`：解码媒体总字节数；`Mmax`：最大的单个解码 payload；
+- `F`：输入文件数。
+
+| 阶段 | 时间复杂度 | 峰值内存／磁盘说明 |
+|---|---|---|
+| 展开输入并按 mtime 排序 | `O(F log F)` | `O(F)` 路径 |
+| Lex + normalize | `O(C + R)` | `O(R)` 已解析记录，加当前原始行 |
+| Merge + chain split | `O(R)` | `O(R)` |
+| Parse + 构建 IR | `O(C + B + M)` | 瞬时内存 `O(C + B + Mmax)`；媒体输出最多 `O(M)` |
+| 分配行号 + emit | `O(B + L)` | 渲染 buffer 最多 `O(L)` |
+| Brief/focused lowering | `O(C + B)` | 每个 IR 只构建一次 section 和 visibility 索引 |
+| 正则匹配 | 取决于 pattern | 普通 literal/simple regex 通常接近 `O(C)`；病态 Python `re` 可能发生超线性回溯 |
+
+因此，除取决于 pattern 的正则行为外，单个实体化文件的复杂度为 `O(C + B + L + M)`。当前文件的峰值工作内存为 `O(C + B + L + Mmax)`。VCC 会在处理下一个文件前显式释放当前结果，所以峰值由最大单文件决定，而不是所有输入之和。
+
+单个实体化文件的持久磁盘量为 `O(Lfull + Lbrief + Lview + M)`；多文件总量是上述各项逐文件求和，再加 `O(F)` 的小型 cache metadata。`--search-only` 的持久输出空间为 `O(1)`，且不会解码嵌入媒体。
+
+## Token 消耗
+
+执行 `VCC.py` 本身消耗 **0 个 LLM/API token**：它是本地确定性 Python 程序。只有 agent 读取生成文本或搜索 stdout 时，才会消耗模型上下文 token。
+
+控制台显示的 `words` 不是 OpenAI、Anthropic 或 GitHub 模型的 token 数。VCC 的轻量 tokenizer 会合并连续字母/数字、单独计算标点并忽略空白，因此只能用于相对大小估计。
+
+设 `U` 为保留的用户 block 数，`A` 为保留的 assistant 文本 block 数，`S_tool` 为实际输出工具摘要的词法总长度，`tu` 为 `-tu`，`t` 为 `-t`：
+
+- Full view 的上下文量大致与所有可见 transcript 文本成正比：`Θ(Cvisible)`。
+- Brief view 大约受 `O(U·tu + A·t + S_tool + headers)` 个 VCC 词法单位约束；thinking 和工具结果正文通常不会进入 brief。路径、pattern 等部分摘要字段没有固定长度上限。
+- Focused/search 输出只与匹配行及 block metadata 成正比，而不是完整 transcript。
+
+最低 token 工作流：先用 `--search-only`，只实体化选中会话，先读 `.min.txt`，最后只打开被引用的 `.txt` 范围。精确模型 token 必须使用实际消费该视图的模型 tokenizer 测量。
+
+## 当前状态和后续方向
+
+VCC 2.3.0 已适合个人工作流、本地团队使用和公开 beta 发布，但定位不是集中式、多租户的会话历史服务。在当前已验证范围内，没有已知会阻塞发布的 P0/P1 问题。
+
+当前版本的验证依据包括：
+
+- 可确定性解析和搜索 Codex、Claude Code 与 GitHub Copilot CLI 日志；
+- 41 项自动化测试、4 个 skill package validator，以及覆盖三个客户端的代表性脱敏 fixture；
+- 已用包含多次上下文压缩边界的真实 Codex 会话验证；
+- Linux、macOS、Windows 和所支持 Python 版本的 CI，以及可复现 benchmark 工具；
+- 有界媒体解码、cache 完整性校验、保守的正则防护和来源感知的 recall 选择。
+
+源 JSONL 始终是正本。生成视图和 cache 都是派生产物：可以用完删除；只有重复检索的收益足以抵消存储和隐私成本时，才应私有保留。`--chain-window` 会降低后续 IR、渲染、磁盘和 agent 上下文成本，但 normalize 阶段仍会保留当前输入已解析的 record，因此超大单会话的内存占用仍与该文件规模成正比。
+
+后续优化按优先级排列如下：
+
+1. 为每个客户端实现有状态的单遍 streaming normalizer，在不改变确定性输出的前提下降低超大日志的峰值内存。
+2. 随客户端格式演进，增加真实 schema fixture、schema drift 检查、坏输入测试和 fuzz 覆盖。
+3. 增加跨操作系统的正则执行隔离或硬超时；当前防护有意采取保守策略，`--allow-unsafe-regex` 仍是显式逃生口。
+4. 在更大 benchmark 档位持续跟踪性能回归，并记录 peak RSS 和长时间 cache 行为。
+5. 如果某些部署认为 size/mtime/ctime 校验不足，再增加高完整性的源文件 hash 模式。
+6. 只有实测负载证明值得时，才考虑可选、隐私友好的增量内容索引。VCC 默认不会把原始会话文本复制进永久索引。
+
+未来客户端 schema 在被 fixture 和测试覆盖前，不视为自动兼容。VCC 不上传会话数据，也不依赖云服务。
+
+## 隐私和限制
+
+会话日志和生成视图可能包含源码、命令、文件路径、工具输出、凭证或其他敏感信息。
+
+- Cache 目录应保持私有，并排除在版本控制和云同步之外。
+- `--cache-dir` 会在 POSIX 系统上尽力设置仅属主可访问的权限。
+- 发布生成视图前必须人工检查。
+- 默认情况下，未以换行结束且格式不完整的最后一条 JSONL 会被视为活跃会话尾部，在给出警告后忽略；中间坏行仍会令该输入失败。
+- 多文件任务会隔离坏输入、继续处理健康文件，并在任一输入失败时返回非零状态。使用 `--strict` 可启用遇错即停，并拒绝不完整尾行。
+- 嵌入媒体扩展名会被净化，Base64 会严格校验；每个解码后对象默认限制为 64 MiB。
+- 大规模实体化搜索会消耗大量磁盘和内存，应优先使用 `--search-only`。
+- 共享 `-o` 目录会在写入前拒绝同 stem 输入。
+- 生成视图只反映编译时的源日志，不能证明当前工作区或运行状态。
+
+## CLI 参数
+
+```text
+VCC.py INPUT [INPUT ...]
+  --grep REGEX       搜索带角色的 block
+  --search-only      必须配合 --grep；逐文件搜索且不写视图
+  --cache-dir DIR    覆盖私有 managed cache 根目录
+  --cache-policy P   复用有效 cache 或强制刷新
+  --strict           拒绝不完整尾行，并在首个输入错误处停止
+  --literal TEXT     搜索一个字面字符串
+  --term TEXT        增加字面锚点，可重复并由 --match 组合
+  --match all|any    多关键词查询语义
+  -i, --ignore-case  忽略大小写
+  --format FORMAT    text、json 或 ndjson 搜索输出
+  --max-matches-per-input N  每个输入只保留分数最高的 N 个 block
+  --diagnostics      输出解析覆盖率、压缩边界和未知事件类型
+  --max-media-bytes N  限制每个解码媒体对象；0 表示不限
+  --chain-window N  只实体化最新 N 个 chain；0 表示全部
+  --allow-unsafe-regex  绕过保守的正则安全检查
+  -o, --output-dir   导出到用户指定目录
+  -t N               brief 视图中 assistant/tool 截断上限，默认 128
+  -tu N              brief 视图中用户消息截断上限，默认 256
+```
+
+`--grep` 使用 Python 正则表达式。搜索普通文本时应转义正则特殊字符。
+
+来源选择、当前会话精确搜索、扩展策略、评分和数量限制见 `VCC.py history-search --help`。
+
+运行 `python benchmarks/benchmark_vcc.py` 可得到 search-only、最新两 chain 实体化和 cache hit 的确定性 JSON benchmark。使用相同机器和参数比较不同版本。
+
+## 引用
+
+```bibtex
+@article{zhang2026vcc,
+  title={View-oriented Conversation Compiler for Agent Trace Analysis},
+  author={Lvmin Zhang and Maneesh Agrawala},
+  year={2026}
+}
+```
