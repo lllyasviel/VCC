@@ -192,7 +192,7 @@ VCC 2.3.0 is ready for personal workflows, local team use, and a public beta. It
 Current release evidence includes:
 
 - deterministic parsing and search for Codex, Claude Code, and GitHub Copilot CLI logs;
-- 41 automated tests, four skill-package validators, and representative sanitized fixtures for all three clients;
+- 42 automated tests, four skill-package validators, and representative sanitized fixtures for all three clients;
 - verification against a real Codex session containing multiple compaction boundaries;
 - Linux, macOS, and Windows CI across the supported Python range, plus a reproducible benchmark tool;
 - bounded media decoding, cache-integrity checks, conservative regex guards, and source-aware recall selection.

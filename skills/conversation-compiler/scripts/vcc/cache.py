@@ -8,6 +8,12 @@ import tempfile
 
 from .common import VCCError, VCC_VERSION
 
+
+def canonical_source_path(input_path):
+    """Return one stable local identity for path aliases to the same source."""
+    return os.path.normcase(os.path.realpath(os.path.abspath(input_path)))
+
+
 def default_cache_root():
     """Return the private per-user cache root without touching the filesystem."""
     if os.environ.get("VCC_CACHE_DIR"):
@@ -21,7 +27,7 @@ def default_cache_root():
     return os.path.join(os.path.expanduser("~"), ".cache", "vcc")
 
 def cache_output_dir(cache_root, input_path):
-    source = os.path.abspath(input_path)
+    source = canonical_source_path(input_path)
     digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:16]
     stem = re.sub(r"[^A-Za-z0-9._-]+", "-", os.path.basename(source)).strip("-")
     return os.path.join(os.path.abspath(cache_root), f"{stem or 'session'}-{digest}")
@@ -106,7 +112,7 @@ def write_cache_metadata(output_dir, input_path, truncate, truncate_user, grep_p
     metadata = {
         "schema_version": 1,
         "vcc_version": VCC_VERSION,
-        "source": os.path.abspath(input_path),
+        "source": canonical_source_path(input_path),
         "source_size": st.st_size,
         "source_mtime_ns": st.st_mtime_ns,
         "source_ctime_ns": st.st_ctime_ns,
@@ -161,7 +167,7 @@ def cache_is_valid(output_dir, input_path, truncate, truncate_user, chain_window
     expected = {
         "schema_version": 1,
         "vcc_version": VCC_VERSION,
-        "source": os.path.abspath(input_path),
+        "source": canonical_source_path(input_path),
         "source_size": st.st_size,
         "source_mtime_ns": st.st_mtime_ns,
         "source_ctime_ns": st.st_ctime_ns,

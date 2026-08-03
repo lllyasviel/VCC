@@ -141,6 +141,24 @@ class OutputPolicyTests(unittest.TestCase):
             self.assertIn("managed cache entry is not a real directory", result.stderr)
             self.assertEqual(list(target.iterdir()), [])
 
+    @unittest.skipUnless(os.name == "posix", "symlink semantics require POSIX")
+    def test_source_path_aliases_share_one_canonical_cache_entry(self):
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as cache:
+            source = Path(td) / "session.jsonl"
+            alias = Path(td) / "alias.jsonl"
+            write_session(source, "canonical-source")
+            alias.symlink_to(source)
+            first = self.run_vcc(str(source), "--cache-dir", cache)
+            second = self.run_vcc(str(alias), "--cache-dir", cache)
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertIn("cache hit", second.stdout)
+            entries = list(Path(cache).iterdir())
+            self.assertEqual(len(entries), 1)
+            metadata = json.loads(
+                (entries[0] / "metadata.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["source"], str(source.resolve()))
+
     def test_search_only_does_not_decode_embedded_media(self):
         with tempfile.TemporaryDirectory() as td:
             source = Path(td) / "media.jsonl"

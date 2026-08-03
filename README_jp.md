@@ -181,7 +181,7 @@ VCC 2.3.0 は個人 workflow、local team での利用、public beta に利用�
 現在の release 根拠：
 
 - Codex、Claude Code、GitHub Copilot CLI log の deterministic な parse と search。
-- 41 件の自動 test、4 件の skill-package validator、3 client を対象とする代表的な sanitized fixture。
+- 42 件の自動 test、4 件の skill-package validator、3 client を対象とする代表的な sanitized fixture。
 - 複数の compaction boundary を含む実際の Codex session による検証。
 - 対応 Python 範囲での Linux、macOS、Windows CI と、再現可能な benchmark tool。
 - media decode 上限、cache integrity check、conservative regex guard、source-aware recall selection。
