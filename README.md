@@ -39,7 +39,7 @@ VCC ships as four companion skills that must be installed together:
 | `searchchat` | Discover sessions across local history without materializing every candidate |
 | `recall` | Recover prior decisions and reconcile them with current workspace state |
 
-See [INSTALL.md](INSTALL.md) for client-specific installation and verification.
+See [INSTALL.md](INSTALL.md) for client-specific installation and verification. See [SKILLS.md](SKILLS.md) for skill descriptions, packaging, portability, and release rules.
 
 ## Quick start
 

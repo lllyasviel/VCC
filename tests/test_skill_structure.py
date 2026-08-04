@@ -25,6 +25,12 @@ class SkillStructureTests(unittest.TestCase):
                     if ":" in line]
             self.assertEqual(keys, ["name", "description"], name)
             self.assertIn(f"name: {name}", frontmatter)
+            description = next(
+                line.split(":", 1)[1].strip().strip('"')
+                for line in frontmatter.splitlines()
+                if line.startswith("description:")
+            )
+            self.assertLessEqual(len(description), 200, name)
             self.assertTrue((skill / "agents" / "openai.yaml").is_file(), name)
 
     def test_companion_runtime_and_public_docs_exist(self):
@@ -36,8 +42,11 @@ class SkillStructureTests(unittest.TestCase):
                      "query.py", "cache.py", "compiler.py", "cli.py"):
             self.assertTrue((modules / name).is_file(), name)
         self.assertLessEqual(len((scripts / "VCC.py").read_text().splitlines()), 30)
-        for name in ("README.md", "README_cn.md", "README_jp.md", "INSTALL.md", "LICENSE"):
+        for name in ("README.md", "README_cn.md", "README_jp.md", "INSTALL.md", "SKILLS.md", "LICENSE"):
             self.assertTrue((ROOT / name).is_file(), name)
+
+        for name in ("README.md", "README_cn.md", "README_jp.md", "INSTALL.md"):
+            self.assertIn("SKILLS.md", (ROOT / name).read_text(encoding="utf-8"), name)
 
     def test_public_docs_report_release_status_and_roadmap(self):
         markers = {

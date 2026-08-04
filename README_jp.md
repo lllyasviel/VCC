@@ -39,7 +39,7 @@ Directory の存在だけでは current agent を判定しません。結果に�
 | `searchchat` | 全候補を保存せずローカル履歴を検索する |
 | `recall` | 過去の判断を復元し、現在の workspace と照合する |
 
-インストールと検証は [INSTALL.md](INSTALL.md) を参照してください。
+インストールと検証は [INSTALL.md](INSTALL.md)、skill description、package、portability、release rule は [SKILLS.md](SKILLS.md) を参照してください。
 
 ## クイックスタート
 

@@ -1,6 +1,6 @@
 ---
 name: recall
-description: "Recover actionable context from a previous GitHub Copilot CLI, Codex, or Claude Code session and verify it against current workspace state. Use when the user invokes /recall, asks to resume earlier work, references a previous agent session, or the conversation begins from a continuation or compaction summary."
+description: "Recover actionable context from a supported past agent session and verify current state. Use for /recall, resuming work, referenced sessions, continuation summaries, or compaction recovery."
 ---
 
 # Recall

@@ -39,7 +39,7 @@ VCC 是论文 “View-oriented Conversation Compiler for Agent Trace Analysis”
 | `searchchat` | 跨本地历史发现会话，不为每个候选生成文件 |
 | `recall` | 恢复历史决策，并与当前工作区状态核对 |
 
-客户端安装位置和验证方法见 [INSTALL.md](INSTALL.md)。
+客户端安装位置和验证方法见 [INSTALL.md](INSTALL.md)；skill 描述、打包、可移植性和发布规则见 [SKILLS.md](SKILLS.md)。
 
 ## 快速开始
 
