@@ -58,7 +58,7 @@ Finally invoke `readchat` against a known session JSONL. Verify that `.txt`, `.m
 Repository maintainers should also run:
 
 ```bash
-python -m py_compile skills/conversation-compiler/scripts/*.py
+python -m compileall -q skills/conversation-compiler/scripts
 python -m unittest discover -s tests -v
 ```
 

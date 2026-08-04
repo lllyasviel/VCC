@@ -96,7 +96,7 @@ VCC requires Python 3.10 or newer. A skill being discoverable does not prove its
 4. Run:
 
    ```bash
-   python -m py_compile skills/conversation-compiler/scripts/*.py
+   python -m compileall -q skills/conversation-compiler/scripts
    python -m unittest discover -s tests -v
    ```
 

@@ -39,7 +39,7 @@ Directory の存在だけでは current agent を判定しません。結果に�
 | `searchchat` | 全候補を保存せずローカル履歴を検索する |
 | `recall` | 過去の判断を復元し、現在の workspace と照合する |
 
-インストールと検証は [INSTALL.md](INSTALL.md)、skill description、package、portability、release rule は [SKILLS.md](SKILLS.md) を参照してください。
+インストールと検証は [INSTALL.md](INSTALL.md)、skill の説明、パッケージ構成、移植性、およびリリース方針は [SKILLS.md](SKILLS.md) を参照してください。
 
 ## クイックスタート
 
@@ -185,7 +185,7 @@ VCC 2.3.1 は個人 workflow、local team での利用、public beta に利用�
 現在の release 根拠：
 
 - Codex、Claude Code、GitHub Copilot CLI log の deterministic な parse と search。
-- 42 件の自動 test、4 件の skill-package validator、3 client を対象とする代表的な sanitized fixture。
+- 44 件の自動 test、4 件の skill-package validator、3 client を対象とする代表的な sanitized fixture。
 - 複数の compaction boundary を含む実際の Codex session による検証。
 - 対応 Python 範囲での Linux、macOS、Windows CI と、再現可能な benchmark tool。
 - media decode 上限、cache integrity check、conservative regex guard、source-aware recall selection。
