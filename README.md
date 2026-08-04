@@ -39,7 +39,7 @@ VCC ships as four companion skills that must be installed together:
 | `searchchat` | Discover sessions across local history without materializing every candidate |
 | `recall` | Recover prior decisions and reconcile them with current workspace state |
 
-See [INSTALL.md](INSTALL.md) for client-specific installation and verification.
+See [INSTALL.md](INSTALL.md) for client-specific installation and verification. See [SKILLS.md](SKILLS.md) for skill descriptions, packaging, portability, and release rules.
 
 ## Quick start
 
@@ -196,7 +196,7 @@ VCC 2.3.1 is ready for personal workflows, local team use, and a public beta. It
 Current release evidence includes:
 
 - deterministic parsing and search for Codex, Claude Code, and GitHub Copilot CLI logs;
-- 42 automated tests, four skill-package validators, and representative sanitized fixtures for all three clients;
+- 44 automated tests, four skill-package validators, and representative sanitized fixtures for all three clients;
 - verification against a real Codex session containing multiple compaction boundaries;
 - Linux, macOS, and Windows CI across the supported Python range, plus a reproducible benchmark tool;
 - bounded media decoding, cache-integrity checks, conservative regex guards, and source-aware recall selection.

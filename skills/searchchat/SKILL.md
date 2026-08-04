@@ -1,6 +1,6 @@
 ---
 name: searchchat
-description: "Search local GitHub Copilot CLI, Codex, and Claude Code session history with VCC block-level references. Use when the user invokes /searchchat, asks whether a topic appeared in prior chats, needs a past-session path, or wants to explore agent history without already knowing the JSONL file."
+description: "Search supported local agent-session history with VCC block references. Use for /searchchat, locating past sessions, checking whether a topic appeared before, or exploring unknown history."
 ---
 
 # Search Chat

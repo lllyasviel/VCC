@@ -1,6 +1,6 @@
 ---
 name: readchat
-description: "Compile and review a specific GitHub Copilot CLI, Codex, or Claude Code session log. Use when the user invokes /readchat, provides an events.jsonl, rollout JSONL, or Claude conversation JSONL path, or asks to inspect one known past session."
+description: "Compile and review one known agent session with VCC. Use for /readchat, events.jsonl, rollout logs, a supplied conversation JSONL, or evidence from a specific past session."
 ---
 
 # Read Chat

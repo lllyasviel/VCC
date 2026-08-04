@@ -1,6 +1,6 @@
 ---
 name: conversation-compiler
-description: "Compile and deterministically search GitHub Copilot CLI, Codex, or Claude Code JSONL session logs as full, brief, focused, or structured views. Use when an agent needs to transform session logs, inspect parser coverage, search local histories, or run VCC directly."
+description: "Compile and deterministically search supported agent-session JSONL with VCC. Use for full, brief, focused, or structured transcript views, parser diagnostics, and history discovery."
 ---
 
 # Conversation Compiler

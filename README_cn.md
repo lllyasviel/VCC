@@ -39,7 +39,7 @@ VCC 是论文 “View-oriented Conversation Compiler for Agent Trace Analysis”
 | `searchchat` | 跨本地历史发现会话，不为每个候选生成文件 |
 | `recall` | 恢复历史决策，并与当前工作区状态核对 |
 
-客户端安装位置和验证方法见 [INSTALL.md](INSTALL.md)。
+客户端安装位置和验证方法见 [INSTALL.md](INSTALL.md)；skill 描述、打包、可移植性和发布规则见 [SKILLS.md](SKILLS.md)。
 
 ## 快速开始
 
@@ -196,7 +196,7 @@ VCC 2.3.1 已适合个人工作流、本地团队使用和公开 beta 发布，�
 当前版本的验证依据包括：
 
 - 可确定性解析和搜索 Codex、Claude Code 与 GitHub Copilot CLI 日志；
-- 42 项自动化测试、4 个 skill package validator，以及覆盖三个客户端的代表性脱敏 fixture；
+- 44 项自动化测试、4 个 skill package validator，以及覆盖三个客户端的代表性脱敏 fixture；
 - 已用包含多次上下文压缩边界的真实 Codex 会话验证；
 - Linux、macOS、Windows 和所支持 Python 版本的 CI，以及可复现 benchmark 工具；
 - 有界媒体解码、cache 完整性校验、保守的正则防护和来源感知的 recall 选择。
