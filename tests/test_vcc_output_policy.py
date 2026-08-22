@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import base64
 import subprocess
@@ -56,6 +57,61 @@ class OutputPolicyTests(unittest.TestCase):
             diagnostics["source_records_total"],
         )
 
+    def test_streaming_pipeline_window_matches_current_full_pipeline(self):
+        scripts = str(VCC.parent)
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        from vcc.parser import load_chains
+
+        for fixture in (
+                "codex-compacted.jsonl", "copilot-events.jsonl",
+                "claude-compacted.jsonl", "deepseek-harness.jsonl"):
+            with self.subTest(fixture=fixture):
+                path = FIXTURES / fixture
+                full_diagnostics = {}
+                full, total = load_chains(path, diagnostics=full_diagnostics)
+                window_diagnostics = {}
+                window, window_total = load_chains(
+                    path, chain_window=2, diagnostics=window_diagnostics
+                )
+                self.assertEqual(window_total, total)
+                self.assertEqual(window, full[-2:])
+                for key in (
+                        "client", "source_records_total",
+                        "source_records_supported", "source_records_ignored",
+                        "source_records_unknown", "normalized_records_emitted",
+                        "unknown_types", "compaction_boundaries"):
+                    self.assertEqual(
+                        window_diagnostics[key], full_diagnostics[key], key
+                    )
+
+    def test_streaming_chain_window_retains_only_latest_chains(self):
+        scripts = str(VCC.parent)
+        if scripts not in sys.path:
+            sys.path.insert(0, scripts)
+        from vcc.parser import load_chains
+
+        records = []
+        for index in range(100):
+            records.append({
+                "type": "response_item",
+                "payload": {"type": "message", "role": "user", "content": [{
+                    "type": "input_text", "text": f"chain-{index}",
+                }]},
+            })
+            if index < 99:
+                records.append({"type": "compacted", "payload": {}})
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "rollout-many-chains.jsonl"
+            write_records(source, records)
+            indexed, total = load_chains(source, chain_window=2)
+        self.assertEqual(total, 100)
+        self.assertEqual([index for index, _ in indexed], [99, 100])
+        self.assertEqual(len(indexed), 2)
+        self.assertIn("chain-98", json.dumps(indexed[0][1]))
+        self.assertIn("chain-99", json.dumps(indexed[1][1]))
+        self.assertNotIn("chain-0\"", json.dumps(indexed))
+
     def test_representative_client_fixtures_and_recall_selection(self):
         with tempfile.TemporaryDirectory() as cache:
             codex = self.run_vcc(
@@ -82,7 +138,8 @@ class OutputPolicyTests(unittest.TestCase):
 
         for fixture, client in (
                 ("copilot-events.jsonl", "copilot"),
-                ("claude-compacted.jsonl", "claude")):
+                ("claude-compacted.jsonl", "claude"),
+                ("deepseek-harness.jsonl", "deepseek")):
             with self.subTest(client=client), tempfile.TemporaryDirectory() as cache:
                 result = self.run_vcc(
                     str(FIXTURES / fixture), "--cache-dir", cache, "--diagnostics"
@@ -92,6 +149,34 @@ class OutputPolicyTests(unittest.TestCase):
                 self.assertEqual(diagnostics["client"], client)
                 self.assert_source_accounting(diagnostics)
                 self.assertEqual(diagnostics["compaction_boundaries"], 1)
+
+                if client == "deepseek":
+                    entry = next(Path(cache).iterdir())
+                    full = next(entry.glob("*.txt")).read_text(encoding="utf-8")
+                    for marker in ("deepseek user marker", "reasoning marker",
+                                   "deepseek answer marker", "tool result marker",
+                                   "session/title: DeepSeek fixture session",
+                                   "goal/change: verify harness normalization"):
+                        self.assertIn(marker, full)
+                    self.assertEqual(diagnostics["unknown_types"], ["plugin/custom-event"])
+
+    def test_deepseek_packed_chunk_rows_are_expanded(self):
+        records = [
+            {"type": "session", "id": "packed", "createdAt": 1, "delegationDepth": 0},
+            {"type": "text-chunks", "seq0": 1, "time0": 2,
+             "data": {"turn": 1, "step": 1, "index": 0, "dt": [1, 1],
+                      "texts": ["packed ", "chunk ", "marker"]}},
+        ]
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as cache:
+            source = Path(td) / "session.jsonl"
+            write_records(source, records)
+            result = self.run_vcc(str(source), "--cache-dir", cache, "--diagnostics")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            diagnostics = self.diagnostics_from(result)
+            self.assertEqual(diagnostics["client"], "deepseek")
+            self.assert_source_accounting(diagnostics)
+            full = next(Path(cache).glob("*/session.txt")).read_text(encoding="utf-8")
+            self.assertIn("packed chunk marker", full.replace("\n", ""))
 
     def test_search_only_writes_no_views(self):
         with tempfile.TemporaryDirectory() as td:
@@ -255,7 +340,7 @@ class OutputPolicyTests(unittest.TestCase):
             self.assertEqual(first.returncode, 0, first.stderr)
             entry = next(Path(cache).iterdir())
             metadata = json.loads((entry / "metadata.json").read_text(encoding="utf-8"))
-            self.assertEqual(metadata["vcc_version"], "2.3.1")
+            self.assertEqual(metadata["vcc_version"], "2.3.2")
             self.assertIn("source_ctime_ns", metadata)
             self.assertIn("source_dev", metadata)
             self.assertIn("source_ino", metadata)
@@ -421,6 +506,42 @@ class OutputPolicyTests(unittest.TestCase):
             self.assertIn(">>>tool_call shell", full)
             self.assertIn("/workspace", full)
 
+    def test_brief_tool_references_use_full_ids_when_suffixes_collide(self):
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as cache:
+            source = Path(td) / "rollout.jsonl"
+            write_records(source, [
+                {"type": "response_item", "payload": {
+                    "type": "function_call", "call_id": "first-ABCDEF", "name": "Bash",
+                    "arguments": '{"command": "first-command"}'}},
+                {"type": "response_item", "payload": {
+                    "type": "function_call_output", "call_id": "first-ABCDEF",
+                    "output": "first-result-marker"}},
+                {"type": "response_item", "payload": {
+                    "type": "function_call", "call_id": "second-ABCDEF", "name": "Bash",
+                    "arguments": '{"command": "second-command"}'}},
+                {"type": "response_item", "payload": {
+                    "type": "function_call_output", "call_id": "second-ABCDEF",
+                    "output": "second-result-marker"}},
+            ])
+            result = self.run_vcc(str(source), "--cache-dir", cache)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            entry = next(Path(cache).iterdir())
+            full_lines = (entry / "rollout.txt").read_text(encoding="utf-8").splitlines()
+            brief_lines = (entry / "rollout.min.txt").read_text(encoding="utf-8").splitlines()
+            markers = {
+                "first-command": next(i for i, line in enumerate(full_lines, 1)
+                                      if "first-result-marker" in line),
+                "second-command": next(i for i, line in enumerate(full_lines, 1)
+                                       if "second-result-marker" in line),
+            }
+            for command, result_line in markers.items():
+                summary = next(line for line in brief_lines if command in line)
+                ranges = [(int(start), int(end))
+                          for start, end in re.findall(r"(\d+)-(\d+)", summary)]
+                self.assertGreaterEqual(len(ranges), 2)
+                self.assertLessEqual(ranges[-1][0], result_line)
+                self.assertGreaterEqual(ranges[-1][1], result_line)
+
     def test_codex_agent_messages_and_reasoning_summaries_are_supported(self):
         with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as cache:
             source = Path(td) / "rollout.jsonl"
@@ -524,6 +645,65 @@ class OutputPolicyTests(unittest.TestCase):
             self.assertIn("expected failure", second)
             self.assertIn("[tool_error]", second)
 
+    def test_copilot_streaming_only_session_is_detected_and_aggregated(self):
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as cache:
+            source = Path(td) / "events.jsonl"
+            write_records(source, [
+                {"type": "assistant.message_delta", "ephemeral": True,
+                 "timestamp": "2026-01-01T00:00:00Z",
+                 "data": {"messageId": "message-1", "deltaContent": "stream "}},
+                {"type": "assistant.message_delta", "ephemeral": True,
+                 "timestamp": "2026-01-01T00:00:01Z",
+                 "data": {"messageId": "message-1", "deltaContent": "survives"}},
+            ])
+            result = self.run_vcc(
+                str(source), "--cache-dir", cache, "--diagnostics"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            full = next(Path(cache).glob("*/events.txt")).read_text(encoding="utf-8")
+            self.assertIn("stream survives", full)
+            diagnostics = self.diagnostics_from(result)
+            self.assertEqual(diagnostics["client"], "copilot")
+            self.assertEqual(diagnostics["source_records_supported"], 2)
+            self.assert_source_accounting(diagnostics)
+
+    def test_copilot_final_message_replaces_streaming_deltas(self):
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as cache:
+            source = Path(td) / "events.jsonl"
+            write_records(source, [
+                {"type": "assistant.message_delta", "ephemeral": True,
+                 "data": {"messageId": "message-1",
+                          "deltaContent": "partial-only-marker"}},
+                {"type": "assistant.message", "data": {
+                    "messageId": "message-1", "content": "final-marker"}},
+            ])
+            result = self.run_vcc(str(source), "--cache-dir", cache)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            full = next(Path(cache).glob("*/events.txt")).read_text(encoding="utf-8")
+            self.assertIn("final-marker", full)
+            self.assertNotIn("partial-only-marker", full)
+
+    def test_copilot_byte_progress_is_ignored_without_hiding_text_delta(self):
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as cache:
+            source = Path(td) / "events.jsonl"
+            write_records(source, [
+                {"type": "assistant.message_delta", "ephemeral": True,
+                 "data": {"messageId": "message-1", "deltaContent": "text-marker"}},
+                {"type": "assistant.streaming_delta", "ephemeral": True,
+                 "data": {"totalResponseSizeBytes": 123456789}},
+            ])
+            result = self.run_vcc(
+                str(source), "--cache-dir", cache, "--diagnostics"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            full = next(Path(cache).glob("*/events.txt")).read_text(encoding="utf-8")
+            self.assertIn("text-marker", full)
+            self.assertNotIn("123456789", full)
+            diagnostics = self.diagnostics_from(result)
+            self.assertEqual(diagnostics["source_records_supported"], 1)
+            self.assertEqual(diagnostics["source_records_ignored"], 1)
+            self.assert_source_accounting(diagnostics)
+
     def test_claude_records_remain_supported(self):
         with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as cache:
             source = Path(td) / "claude.jsonl"
@@ -538,6 +718,26 @@ class OutputPolicyTests(unittest.TestCase):
             full = next(Path(cache).glob("*/claude.txt")).read_text(encoding="utf-8")
             self.assertIn("claude-marker", full)
             self.assertIn("claude-answer", full)
+
+    def test_claude_unknown_content_block_is_preserved_and_reported(self):
+        with tempfile.TemporaryDirectory() as td, tempfile.TemporaryDirectory() as cache:
+            source = Path(td) / "claude.jsonl"
+            write_records(source, [{
+                "type": "assistant", "message": {"content": [{
+                    "type": "future_block", "payload": "future-block-marker",
+                }]},
+            }])
+            result = self.run_vcc(
+                str(source), "--cache-dir", cache, "--diagnostics"
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            full = next(Path(cache).glob("*/claude.txt")).read_text(encoding="utf-8")
+            self.assertIn("[unsupported content block: future_block]", full)
+            self.assertIn("future-block-marker", full)
+            diagnostics = self.diagnostics_from(result)
+            self.assertEqual(
+                diagnostics["unknown_content_block_types"], ["future_block"]
+            )
 
     def test_claude_harness_metadata_is_known_and_ignored(self):
         with tempfile.TemporaryDirectory() as td:
@@ -686,6 +886,22 @@ class OutputPolicyTests(unittest.TestCase):
             self.assertEqual(len(matches), 1)
             self.assertEqual(matches[0]["role"], "user")
 
+    def test_per_input_match_limit_prefers_latest_equal_score_block(self):
+        with tempfile.TemporaryDirectory() as td:
+            source = Path(td) / "rank.jsonl"
+            write_records(source, [
+                {"type": "user", "message": {"content": "rank-marker oldest"}},
+                {"type": "user", "message": {"content": "rank-marker newest"}},
+            ])
+            result = self.run_vcc(
+                str(source), "--literal", "rank-marker", "--search-only",
+                "--format", "json", "--max-matches-per-input", "1",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            matches = json.loads(result.stdout)
+            self.assertEqual(len(matches), 1)
+            self.assertEqual(matches[0]["lines"][0]["text"], "rank-marker newest")
+
     def test_diagnostics_report_client_and_unknown_events(self):
         with tempfile.TemporaryDirectory() as td:
             source = Path(td) / "rollout.jsonl"
@@ -730,11 +946,12 @@ class OutputPolicyTests(unittest.TestCase):
                 "history-search", "VCC cache publish", "--current-client", "codex",
                 "--root", f"codex={base / 'codex'}",
                 "--root", f"claude={base / 'claude'}",
-                "--root", f"copilot={copilot}", "--format", "json",
+                "--root", f"copilot={copilot}",
+                "--root", f"deepseek={base / 'deepseek'}", "--format", "json",
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             report = json.loads(result.stdout)
-            self.assertEqual(report["tiers_searched"], ["codex", "copilot", "claude"])
+            self.assertEqual(report["tiers_searched"], ["codex", "copilot", "claude", "deepseek"])
             self.assertIn("weak", report["expansion_reason"])
             self.assertEqual(report["results"][0]["client"], "claude")
 
@@ -758,6 +975,39 @@ class OutputPolicyTests(unittest.TestCase):
             report = json.loads(result.stdout)
             self.assertEqual(report["tiers_searched"], ["codex"])
             self.assertIsNone(report["expansion_reason"])
+
+    def test_history_search_equal_scores_prefer_source_tier_then_recency(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            codex = base / "codex" / "2026" / "01" / "01"
+            claude = base / "claude"
+            codex.mkdir(parents=True)
+            claude.mkdir()
+            codex_file = codex / "rollout-current.jsonl"
+            older = claude / "a-older.jsonl"
+            newer = claude / "z-newer.jsonl"
+            for path in (codex_file, older, newer):
+                write_session(path, "equal score anchor")
+            os.utime(codex_file, (1, 1))
+            os.utime(older, (2, 2))
+            os.utime(newer, (3, 3))
+            result = self.run_vcc(
+                "history-search", "equal score anchor", "--current-client", "codex",
+                "--expand-on", "always", "--root", f"codex={base / 'codex'}",
+                "--root", f"claude={claude}",
+                "--root", f"copilot={base / 'missing-copilot'}",
+                "--root", f"deepseek={base / 'missing-deepseek'}", "--format", "json",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(result.stdout)
+            user_matches = [item for item in report["results"] if item["role"] == "user"]
+            self.assertEqual(Path(user_matches[0]["source"]), codex_file)
+            claude_matches = [item for item in user_matches if item["client"] == "claude"]
+            self.assertEqual(Path(claude_matches[0]["source"]), newer)
+            self.assertGreater(
+                claude_matches[0]["source_mtime_ns"],
+                claude_matches[1]["source_mtime_ns"],
+            )
 
     def test_history_search_prefers_exact_current_session(self):
         with tempfile.TemporaryDirectory() as td:
@@ -787,14 +1037,15 @@ class OutputPolicyTests(unittest.TestCase):
                 "history-search", "fallback anchor",
                 "--root", f"codex={base / 'codex'}",
                 "--root", f"claude={base / 'missing-claude'}",
-                "--root", f"copilot={base / 'missing-copilot'}", "--format", "json",
+                "--root", f"copilot={base / 'missing-copilot'}",
+                "--root", f"deepseek={base / 'missing-deepseek'}", "--format", "json",
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             report = json.loads(result.stdout)
             self.assertEqual(report["scope"], "auto")
             self.assertIsNone(report["current_client"])
-            self.assertEqual(report["tiers_searched"], ["copilot", "codex", "claude"])
-            self.assertEqual(set(report["absent_roots"]), {"copilot", "claude"})
+            self.assertEqual(report["tiers_searched"], ["copilot", "codex", "claude", "deepseek"])
+            self.assertEqual(set(report["absent_roots"]), {"copilot", "claude", "deepseek"})
 
     def test_history_search_explicit_scope_overrides_current_session(self):
         with tempfile.TemporaryDirectory() as td:

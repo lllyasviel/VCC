@@ -2,7 +2,7 @@
 
 import re
 
-VCC_VERSION = "2.3.1"
+VCC_VERSION = "2.3.2"
 DEFAULT_MAX_MEDIA_BYTES = 64 * 1024 * 1024
 
 

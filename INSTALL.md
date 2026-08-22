@@ -7,6 +7,12 @@ For the design, packaging, portability, and maintenance rules behind the four pa
 - Python 3.10+
 - All four VCC skill directories installed together
 
+DeepSeek Harness `.jsonl.zstd` logs require the optional Python `zstandard` package. Plain `.jsonl` logs do not add a dependency:
+
+```bash
+python -m pip install zstandard
+```
+
 ## Choose an install location
 
 Copy `conversation-compiler`, `readchat`, `recall`, and `searchchat` from this repository's `skills/` directory into one supported skill root:

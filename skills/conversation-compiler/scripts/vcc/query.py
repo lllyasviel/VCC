@@ -2,6 +2,21 @@
 
 import json
 import os
+import re
+
+
+class LiteralPattern:
+    """Regex-compatible literal matcher with a fast searchable representation."""
+
+    def __init__(self, value, ignore_case=False):
+        self.literal = value
+        self.ignore_case = ignore_case
+        self.needle = value.casefold() if ignore_case else value
+        self.pattern = re.escape(value)
+
+    def search(self, text):
+        haystack = text.casefold() if self.ignore_case else text
+        return self.needle in haystack
 
 def _rel_path(fp):
     try:
@@ -22,7 +37,12 @@ _ROLE_SCORE = {
 
 def _query_matches(lines, patterns, match_mode):
     text = "\n".join(lines)
-    hits = [p for p in patterns if p.search(text)]
+    if patterns and all(isinstance(pattern, LiteralPattern) for pattern in patterns):
+        ignore_case = patterns[0].ignore_case
+        haystack = text.casefold() if ignore_case else text
+        hits = [pattern for pattern in patterns if pattern.needle in haystack]
+    else:
+        hits = [pattern for pattern in patterns if pattern.search(text)]
     accepted = len(hits) == len(patterns) if match_mode == "all" else bool(hits)
     return accepted, hits
 
@@ -48,7 +68,13 @@ def collect_search_matches(results, patterns, match_mode="any"):
             end = start + len(o["content"]) - 1
             matching_lines = []
             for offset, line in enumerate(o["content"]):
-                if any(pattern.search(line) for pattern in hits):
+                if hits and all(isinstance(pattern, LiteralPattern) for pattern in hits):
+                    ignore_case = hits[0].ignore_case
+                    haystack = line.casefold() if ignore_case else line
+                    line_matches = any(pattern.needle in haystack for pattern in hits)
+                else:
+                    line_matches = any(pattern.search(line) for pattern in hits)
+                if line_matches:
                     matching_lines.append({"line": start + offset, "text": line})
             role = o["type"]
             matches.append({
@@ -78,7 +104,8 @@ def limit_matches(matches, limit):
         grouped[source].append(match)
     limited = []
     for source in order:
-        ranked = sorted(grouped[source], key=lambda item: (-item["score"], item["line_start"]))
+        ranked = sorted(
+            grouped[source], key=lambda item: (-item["score"], -item["line_start"]))
         limited.extend(ranked[:limit])
     return limited
 

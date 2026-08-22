@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README_cn.md) | [日本語](README_jp.md)
 
-VCC 将本地 agent 会话 JSONL 编译成易读、可搜索的视图，并提供稳定的 block 角色和行号范围引用。目前支持 GitHub Copilot CLI、Codex 和 Claude Code，可自动识别输入格式。
+VCC 将本地 agent 会话 JSONL 编译成易读、可搜索的视图，并提供稳定的 block 角色和行号范围引用。目前支持 GitHub Copilot CLI、Codex、Claude Code 和 DeepSeek Harness，可自动识别输入格式。
 
 VCC 是论文 “View-oriented Conversation Compiler for Agent Trace Analysis” 的配套实现（[论文](https://arxiv.org/abs/2603.29678)）。学术复现实验位于 [VCC-experiments](https://github.com/lllyasviel/VCC-experiments)。
 
@@ -13,12 +13,13 @@ VCC 是论文 “View-oriented Conversation Compiler for Agent Trace Analysis”
 | GitHub Copilot CLI | `${COPILOT_HOME:-$HOME/.copilot}/session-state/*/events.jsonl` | 消息、reasoning、工具、结果、compaction |
 | Codex | `${CODEX_HOME:-$HOME/.codex}/sessions/YYYY/MM/DD/rollout-*.jsonl` | 消息及 function/custom tool 事件 |
 | Claude Code | `$HOME/.claude/projects/**/*.jsonl` | 消息、thinking、工具、结果、compaction |
+| DeepSeek Harness | `${DSH_HOME:-$HOME/.dsh}/sessions/**/session.jsonl[.zstd]` | 消息、reasoning、工具、结果、compaction |
 
 原始 JSONL 始终是权威数据。生成视图是可再生派生数据；如果活跃会话继续追加，旧视图就会过期。
 
 ### 默认来源优先级
 
-`searchchat` 和 `recall` 不会无条件同时搜索三个客户端：
+`searchchat` 和 `recall` 不会无条件同时搜索所有客户端：
 
 1. 用户明确指定的客户端或客户端集合优先级最高。
 2. 用户明确要求全局或跨平台搜索时，直接搜索所有存在的来源。
@@ -107,9 +108,9 @@ Cache 是可再生的。源 JSONL 变化或 VCC 升级后应重新生成；不�
 
 单个精确文本使用 `--literal`；多锚点查询重复使用 `--term` 并通过 `--match all|any` 指定语义；只有真正需要正则时才使用 `--grep`。`--format json|ndjson` 会输出带 schema 版本的 block 记录，包括来源、角色、full-view 范围、命中 pattern、命中行和确定性相关度分数。用户和 assistant 命中高于无上下文的工具输出；排序只用于选择候选，不能替代证据核验。
 
-`history-search` 会枚举 Copilot、Codex 和 Claude 历史目录，先搜索显式传入的当前客户端，默认只在无命中或弱命中时扩展。当前客户端未知时会搜索全部来源并报告回退。`--current-session` 为上下文压缩恢复增加一个精确的第一层级。
+`history-search` 会枚举 Copilot、Codex、Claude 和 DeepSeek Harness 历史目录，先搜索显式传入的当前客户端，默认只在无命中或弱命中时扩展。当前客户端未知时会搜索全部来源并报告回退。`--current-session` 为上下文压缩恢复增加一个精确的第一层级。
 
-每条结构化命中都包含可用时取自原始事件的 `event_timestamp`，文本输出显示为 `event=...`。它表示命中消息或工具事件的时间，不自动等于实验开始或产物生成时间；需要区分时应继续检查相邻工具调用。会话路径中的日期只表示客户端归档或首次创建会话的位置，复用会话时可能与命中时间不同。
+每条结构化命中都包含可用时取自原始事件的 `event_timestamp`，文本输出显示为 `event=...`。它表示命中消息或工具事件的时间，不自动等于实验开始或产物生成时间；需要区分时应继续检查相邻工具调用。历史结果依次按相关度分数、来源 tier、源文件修改时间和较新的命中 block 排序；`source_mtime_ns` 只是文件级同分条件，不是事件时间。会话路径中的日期只表示客户端归档或首次创建会话的位置，复用会话时可能与命中时间不同。
 
 Diagnostics schema v2 将源记录计数与规范化输出分开：`source_records_supported + source_records_ignored + source_records_unknown` 始终等于 `source_records_total`；一条源事件可能产生多条规范化记录，因此 `normalized_records_emitted` 可以不同。`recall_selection` 会直接给出压缩前和最新 brief view，使 agent 默认跳过更早 chain。
 
@@ -123,7 +124,7 @@ VCC 会识别输入格式，将其归一化成统一会话模型，解析带角�
 
 VCC 对每个输入文件执行确定性流水线：
 
-1. **Lex**：逐行读取 JSONL，并识别 Copilot、Codex 或 Claude 格式。
+1. **Lex**：逐行读取 JSONL，并识别 Copilot、Codex、Claude 或 DeepSeek Harness 格式。
 2. **Normalize**：把客户端特有的消息和工具事件转换为统一 record。
 3. **Merge / split**：合并流式 assistant chunk，并按 compaction boundary 拆分 chain。
 4. **Parse**：把消息、reasoning、工具、结果和媒体引用解析成中间表示（IR）。
@@ -136,7 +137,7 @@ VCC 对每个输入文件执行确定性流水线：
 | 模块 | 职责 |
 |---|---|
 | `common.py` | 共享版本、限制、错误类型和文本工具 |
-| `normalizers.py` | Codex 和 GitHub Copilot 客户端专用 schema adapter |
+| `normalizers.py` | Codex、GitHub Copilot 和 DeepSeek Harness 的 schema adapter |
 | `parser.py` | 客户端识别、JSONL 校验、chain 处理、媒体处理、诊断和 IR 构建 |
 | `renderer.py` | 稳定行号分配，以及 full、brief、focused 视图 lowering |
 | `query.py` | Block 匹配、确定性评分、按来源限额和 text/JSON/NDJSON 输出 |
@@ -157,19 +158,20 @@ Base64 图片和文档只在实体化视图时解码；`--search-only` 仅保留
 - `B`：IR node/section 数量；
 - `L`：渲染输出大小；
 - `M`：解码媒体总字节数；`Mmax`：最大的单个解码 payload；
+- `W`：`--chain-window` 实际保留的归一化内容量（设为 `0` 时为全部 chain）；
+- `T`：客户端安全归一化所需的最大分段，通常是一条 record 或一个 turn；
 - `F`：输入文件数。
 
 | 阶段 | 时间复杂度 | 峰值内存／磁盘说明 |
 |---|---|---|
 | 展开输入并按 mtime 排序 | `O(F log F)` | `O(F)` 路径 |
-| Lex + normalize | `O(C + R)` | `O(R)` 已解析记录，加当前原始行 |
-| Merge + chain split | `O(R)` | `O(R)` |
-| Parse + 构建 IR | `O(C + B + M)` | 瞬时内存 `O(C + B + Mmax)`；媒体输出最多 `O(M)` |
+| 流式 lex + normalize + chain 选择 | `O(C + R)` | 使用 `--chain-window` 时为 `O(W + T)`；保留全部 chain 时为 `O(C + R)` |
+| Parse + 构建 IR | `O(W + B + M)` | 瞬时内存 `O(W + B + Mmax)`；媒体输出最多 `O(M)` |
 | 分配行号 + emit | `O(B + L)` | 渲染 buffer 最多 `O(L)` |
 | Brief/focused lowering | `O(C + B)` | 每个 IR 只构建一次 section 和 visibility 索引 |
 | 正则匹配 | 取决于 pattern | 普通 literal/simple regex 通常接近 `O(C)`；病态 Python `re` 可能发生超线性回溯 |
 
-因此，除取决于 pattern 的正则行为外，单个实体化文件的复杂度为 `O(C + B + L + M)`。当前文件的峰值工作内存为 `O(C + B + L + Mmax)`。VCC 会在处理下一个文件前显式释放当前结果，所以峰值由最大单文件决定，而不是所有输入之和。
+因此，除取决于 pattern 的正则行为外，单个实体化文件的耗时与内容和输出线性相关。chain window 有界时，峰值工作内存为 `O(W + T + B + L + Mmax)`，不再与全部源 record 成正比；使用 `--chain-window 0` 保留全部 chain 时，仍需 `O(C + R + B + L + Mmax)`。VCC 会在处理下一个文件前释放当前结果，所以峰值由最大单文件决定，而不是所有输入之和。
 
 单个实体化文件的持久磁盘量为 `O(Lfull + Lbrief + Lview + M)`；多文件总量是上述各项逐文件求和，再加 `O(F)` 的小型 cache metadata。`--search-only` 的持久输出空间为 `O(1)`，且不会解码嵌入媒体。
 
@@ -181,36 +183,46 @@ Base64 图片和文档只在实体化视图时解码；`--search-only` 仅保留
 
 控制台显示的 `words` 不是 OpenAI、Anthropic 或 GitHub 模型的 token 数。VCC 的轻量 tokenizer 会合并连续字母/数字、单独计算标点并忽略空白，因此只能用于相对大小估计。
 
+Token 成本分为三个不同层次。下面是当前仓库的体积实测，不是任一模型 tokenizer 的精确 token 保证：
+
+| 层次 | 当前体积或行为 | 通常影响 |
+|---|---|---|
+| Skill discovery | 四个 description 合计 722 个字符 | 很小；用于判断应加载哪个 skill |
+| 被调用的 skill 指令 | `conversation-compiler` 4.96 KB、`readchat` 2.17 KB、`recall` 4.45 KB、`searchchat` 3.01 KB | 小到中等；通常只加载本次调用的 skill body |
+| VCC 执行 | 本地 Python，0 API token | 在 stdout 或文件被读取前没有模型成本 |
+| 搜索结果／view 消费 | 与返回的匹配内容和 agent 实际读取的 transcript 文本量成正比 | 通常是 VCC 相关 token 的主要来源 |
+
+同时安装四个 companion skill，不代表每次请求都会加载四份完整指令。host 可以先暴露短 description 用于路由，再只加载适用的 skill；具体行为取决于 agent host。host 包装、工具调用消息、推理过程和最终回答也会消耗 token，但这些不是 VCC 本身的执行成本。
+
 设 `U` 为保留的用户 block 数，`A` 为保留的 assistant 文本 block 数，`S_tool` 为实际输出工具摘要的词法总长度，`tu` 为 `-tu`，`t` 为 `-t`：
 
 - Full view 的上下文量大致与所有可见 transcript 文本成正比：`Θ(Cvisible)`。
 - Brief view 大约受 `O(U·tu + A·t + S_tool + headers)` 个 VCC 词法单位约束；thinking 和工具结果正文通常不会进入 brief。路径、pattern 等部分摘要字段没有固定长度上限。
 - Focused/search 输出只与匹配行及 block metadata 成正比，而不是完整 transcript。
 
-最低 token 工作流：先用 `--search-only`，只实体化选中会话，先读 `.min.txt`，最后只打开被引用的 `.txt` 范围。精确模型 token 必须使用实际消费该视图的模型 tokenizer 测量。
+最低 token 工作流：先用 `--search-only` 并限制返回匹配数，只用 `--chain-window 2` 实体化选中会话，先读 `.min.txt`，最后只打开被引用的 `.txt` 范围。如果 focused range 已足够，不要把整个 `.txt` 放入上下文。精确模型 token 必须使用实际消费该视图的模型 tokenizer 测量。
 
 ## 当前状态和后续方向
 
-VCC 2.3.1 已适合个人工作流、本地团队使用和公开 beta 发布，但定位不是集中式、多租户的会话历史服务。在当前已验证范围内，没有已知会阻塞发布的 P0/P1 问题。
+VCC 2.3.2 已适合个人工作流、本地团队使用和公开 beta 发布，但定位不是集中式、多租户的会话历史服务。在当前已验证范围内，没有已知会阻塞发布的 P0/P1 问题。
 
 当前版本的验证依据包括：
 
-- 可确定性解析和搜索 Codex、Claude Code 与 GitHub Copilot CLI 日志；
-- 44 项自动化测试、4 个 skill package validator，以及覆盖三个客户端的代表性脱敏 fixture；
+- 可确定性解析和搜索 Codex、Claude Code、GitHub Copilot CLI 与 DeepSeek Harness 日志；
+- 54 项自动化测试、4 个 skill package validator，以及覆盖四个客户端的代表性脱敏 fixture；
 - 已用包含多次上下文压缩边界的真实 Codex 会话验证；
 - Linux、macOS、Windows 和所支持 Python 版本的 CI，以及可复现 benchmark 工具；
 - 有界媒体解码、cache 完整性校验、保守的正则防护和来源感知的 recall 选择。
 
-源 JSONL 始终是正本。生成视图和 cache 都是派生产物：可以用完删除；只有重复检索的收益足以抵消存储和隐私成本时，才应私有保留。`--chain-window` 会降低后续 IR、渲染、磁盘和 agent 上下文成本，但 normalize 阶段仍会保留当前输入已解析的 record，因此超大单会话的内存占用仍与该文件规模成正比。
+源 JSONL 始终是正本。生成视图和 cache 都是派生产物：可以用完删除；只有重复检索的收益足以抵消存储和隐私成本时，才应私有保留。streaming normalizer 每次只读取一条原始行，只缓冲客户端语义要求的最小单元，并且只保留选中的 chain。本机对 100,000 条 record、47.9 MB 的 Codex 合成日志使用 `--chain-window 2` 测试时，peak RSS 从 244 MB 降至 19.8 MB，耗时从 0.459 秒降至 0.339 秒；不同平台和负载结果会有差异。
 
 后续优化按优先级排列如下：
 
-1. 为每个客户端实现有状态的单遍 streaming normalizer，在不改变确定性输出的前提下降低超大日志的峰值内存。
-2. 随客户端格式演进，增加真实 schema fixture、schema drift 检查、坏输入测试和 fuzz 覆盖。
-3. 增加跨操作系统的正则执行隔离或硬超时；当前防护有意采取保守策略，`--allow-unsafe-regex` 仍是显式逃生口。
-4. 在更大 benchmark 档位持续跟踪性能回归，并记录 peak RSS 和长时间 cache 行为。
-5. 为文件系统无法提供可靠替换 identity 的部署增加可选的跨平台高完整性 hash 模式；Windows 已自动启用 hash。
-6. 只有实测负载证明值得时，才考虑可选、隐私友好的增量内容索引。VCC 默认不会把原始会话文本复制进永久索引。
+1. 随客户端格式演进，增加真实 schema fixture、schema drift 检查、坏输入测试和 fuzz 覆盖。
+2. 增加跨操作系统的正则执行隔离或硬超时；当前防护有意采取保守策略，`--allow-unsafe-regex` 仍是显式逃生口。
+3. 在更大 benchmark 档位持续跟踪性能回归，并记录 peak RSS 和长时间 cache 行为。
+4. 为文件系统无法提供可靠替换 identity 的部署增加可选的跨平台高完整性 hash 模式；Windows 已自动启用 hash。
+5. 只有实测负载证明值得时，才考虑可选、隐私友好的增量内容索引。VCC 默认不会把原始会话文本复制进永久索引。
 
 未来客户端 schema 在被 fixture 和测试覆盖前，不视为自动兼容。VCC 不上传会话数据，也不依赖云服务。
 

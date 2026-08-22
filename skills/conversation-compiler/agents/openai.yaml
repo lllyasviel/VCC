@@ -1,4 +1,4 @@
 interface:
-  display_name: "Conversation Compiler"
-  short_description: "Compile agent session logs into useful text views"
+  display_name: "VCC Conversation Compiler"
+  short_description: "VCC: Compile agent session logs into useful text views"
   default_prompt: "Use $conversation-compiler to compile this session JSONL and inspect its generated views."

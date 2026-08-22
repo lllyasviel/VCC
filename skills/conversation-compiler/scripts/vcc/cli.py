@@ -20,7 +20,7 @@ from .cache import (
 )
 from .common import DEFAULT_MAX_MEDIA_BYTES, VCCError, VCC_VERSION
 from .compiler import compile_session
-from .query import limit_matches, collect_search_matches, emit_search_results
+from .query import LiteralPattern, limit_matches, collect_search_matches, emit_search_results
 
 MAX_REGEX_PATTERN_LENGTH = 4096
 _NESTED_UNBOUNDED_REPEAT = re.compile(
@@ -112,11 +112,11 @@ def main():
                         "--allow-unsafe-regex")
             patterns = [re.compile(a.grep, flags)]
         elif a.literal is not None:
-            patterns = [re.compile(re.escape(a.literal), flags)]
+            patterns = [LiteralPattern(a.literal, a.ignore_case)]
         elif a.term:
             if any(not term for term in a.term):
                 p.error("--term values must not be empty")
-            patterns = [re.compile(re.escape(term), flags) for term in a.term]
+            patterns = [LiteralPattern(term, a.ignore_case) for term in a.term]
         else:
             patterns = []
     except re.error as e:
@@ -164,6 +164,7 @@ def main():
                 protected_inputs=protected_inputs,
                 max_media_bytes=a.max_media_bytes,
                 chain_window=a.chain_window,
+                retain_ir=has_query,
             )
             diagnostics_by_path[f] = diagnostics
             if a.diagnostics:

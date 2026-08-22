@@ -10,7 +10,7 @@ import sys
 import time
 
 
-CLIENTS = ("copilot", "codex", "claude")
+CLIENTS = ("copilot", "codex", "claude", "deepseek")
 
 
 def default_roots():
@@ -19,6 +19,7 @@ def default_roots():
         "copilot": Path(os.environ.get("COPILOT_HOME", home / ".copilot")) / "session-state",
         "codex": Path(os.environ.get("CODEX_HOME", home / ".codex")) / "sessions",
         "claude": home / ".claude" / "projects",
+        "deepseek": Path(os.environ.get("DSH_HOME", home / ".dsh")) / "sessions",
     }
 
 
@@ -39,6 +40,8 @@ def enumerate_sessions(client, root, since_days=None, path_contains=None, max_fi
         paths = root.glob("*/events.jsonl")
     elif client == "codex":
         paths = root.glob("**/rollout-*.jsonl")
+    elif client == "deepseek":
+        paths = list(root.glob("**/session.jsonl")) + list(root.glob("**/session.jsonl.zstd"))
     else:
         paths = root.glob("**/*.jsonl")
     selected = sorted(
@@ -207,11 +210,14 @@ def main(argv=None):
         )
     if use_exact:
         if exact.is_file():
+            exact_mtime_ns = exact.stat().st_mtime_ns
             matches, batch_errors, batch_warnings = run_vcc(
                 vcc_path, [exact], terms, match_mode, not args.case_sensitive)
             for match in matches:
                 match["client"] = current or "current"
                 match["tier"] = "current-session"
+                match["source_mtime_ns"] = exact_mtime_ns
+                match["_tier_rank"] = 0
             all_matches.extend(matches)
             errors.extend(batch_errors)
             warnings.extend(batch_warnings)
@@ -235,11 +241,17 @@ def main(argv=None):
                 if use_exact:
                     paths = [path for path in paths if path.resolve() != exact.resolve()]
                 paths = [path for path in paths if path.resolve() not in excluded]
+                source_mtimes = {
+                    str(path.resolve()): path.stat().st_mtime_ns for path in paths
+                }
                 matches, batch_errors, batch_warnings = run_vcc(
                     vcc_path, paths, terms, match_mode, not args.case_sensitive)
                 for match in matches:
                     match["client"] = client
                     match["tier"] = tier_index + 1
+                    match["source_mtime_ns"] = source_mtimes.get(
+                        str(Path(match["source"]).resolve()), 0)
+                    match["_tier_rank"] = tier_index + 1
                 tier_matches.extend(matches)
                 errors.extend(batch_errors)
                 warnings.extend(batch_warnings)
@@ -255,9 +267,13 @@ def main(argv=None):
                 continue
             break
 
-    all_matches.sort(key=lambda match: (-match["score"], match["source"], match["line_start"]))
+    all_matches.sort(key=lambda match: (
+        -match["score"], match.get("_tier_rank", 1 << 30),
+        -match.get("source_mtime_ns", 0), match["source"], -match["line_start"],
+    ))
     for match in all_matches:
         match["strength"] = "strong" if match["score"] >= args.strong_score else "weak"
+        match.pop("_tier_rank", None)
     report = {
         "schema_version": 1,
         "scope": scope,

@@ -2,14 +2,20 @@
 
 import base64
 import binascii
+import io
 import json
 import os
 import re
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict, deque
 from datetime import datetime
 
-from .normalizers import is_copilot_events, normalize_codex, normalize_copilot
+from .normalizers import (
+    DEEPSEEK_CORE_EVENT_TYPES, DEEPSEEK_IGNORED_EVENT_TYPES,
+    DEEPSEEK_STORAGE_EVENT_TYPES,
+    is_copilot_record, normalize_codex_record, normalize_copilot,
+    normalize_deepseek,
+)
 
 from .common import (
     DEFAULT_MAX_MEDIA_BYTES,
@@ -24,6 +30,13 @@ from .common import (
 SEP = "══════════════════════════════"
 _DISCARD_T = {"queue-operation", "file-history-snapshot", "last-prompt", "progress"}
 _DISCARD_S = {"stop_hook_summary", "api_error", "bridge_status", "informational", "local_command"}
+
+
+def _discard(record):
+    typ = record.get("type")
+    return typ in _DISCARD_T or (
+        typ == "system" and record.get("subtype") in _DISCARD_S
+    )
 
 def short_filename(fn):
     n, e = os.path.splitext(fn)
@@ -40,145 +53,401 @@ def _short_tid(tid):
 
 
 
-def load_records(path, tolerate_partial_tail=True, diagnostics=None):
-    recs = []
+_CODEX_SUPPORTED_RESPONSE_TYPES = {
+    "message", "function_call", "custom_tool_call", "agent_message",
+    "reasoning", "function_call_output", "custom_tool_call_output",
+}
+_CODEX_KNOWN_TOP_LEVEL_TYPES = {
+    "session_meta", "event_msg", "response_item", "world_state",
+    "turn_context", "inter_agent_communication_metadata", "compacted",
+}
+_COPILOT_KNOWN_TYPES = {
+    "system.message", "user.message", "assistant.reasoning", "assistant.message",
+    "tool.execution_start", "tool.user_requested", "tool.execution_complete",
+    "session.compaction_complete", "session.error", "assistant.streaming_delta",
+    "assistant.message_delta", "assistant.reasoning_delta", "assistant.turn_start",
+    "assistant.turn_end", "assistant.intent", "assistant.usage",
+    "assistant.tool_call_delta", "assistant.server_tool_progress",
+    "tool.execution_partial_result", "tool.execution_progress",
+    "permission.requested", "permission.completed", "session.idle",
+    "session.compaction_start", "session.title_changed",
+    "session.context_changed", "session.usage_info",
+}
+_CLAUDE_METADATA_TYPES = {"attachment", "mode"}
+_CLAUDE_KNOWN_TYPES = {"system", "user", "assistant"} | _DISCARD_T | _CLAUDE_METADATA_TYPES
+_CLAUDE_KNOWN_BLOCK_TYPES = {
+    "thinking", "redacted_thinking", "text", "tool_use", "tool_result",
+    "image", "document",
+}
 
+
+def _iter_source_records(path, tolerate_partial_tail, diagnostics):
+    """Yield JSON objects while retaining only one raw source line."""
     def parse_line(line, line_number, final=False):
         try:
-            rec = json.loads(line)
+            record = json.loads(line)
         except json.JSONDecodeError as exc:
-            is_partial_tail = (
-                tolerate_partial_tail and final and
-                not line.endswith(("\n", "\r"))
-            )
-            if is_partial_tail:
+            if (tolerate_partial_tail and final and
+                    not line.endswith(("\n", "\r"))):
                 if diagnostics is not None:
                     diagnostics["partial_tail_ignored"] = True
                 print(
                     f"warning: {path}:{line_number}: ignored incomplete live-session tail",
                     file=sys.stderr,
                 )
-                return
+                return None
             raise VCCError(
                 f"{path}:{line_number}:{exc.colno}: invalid JSON: {exc.msg}"
             ) from exc
-        if not isinstance(rec, dict):
+        if not isinstance(record, dict):
             raise VCCError(f"{path}:{line_number}: expected a JSON object")
-        recs.append(rec)
+        return record
 
-    # Hold only the most recent nonblank line so an unterminated malformed tail can
-    # be distinguished from a malformed middle record without retaining raw JSONL.
+    if str(path).endswith(".zstd"):
+        try:
+            import zstandard
+        except ImportError as exc:
+            raise VCCError(
+                f"{path}: DeepSeek Harness .zstd logs require the optional 'zstandard' package"
+            ) from exc
+        binary = open(path, "rb")
+        stream = zstandard.ZstdDecompressor().stream_reader(binary)
+        source = io.TextIOWrapper(stream, encoding="utf-8")
+    else:
+        source = open(path, encoding="utf-8")
+
     pending = None
-    with open(path, encoding="utf-8") as f:
-        for line_number, line in enumerate(f, 1):
+    with source:
+        for line_number, line in enumerate(source, 1):
             if not line.strip():
                 continue
             if pending is not None:
-                parse_line(*pending)
+                record = parse_line(*pending)
+                if record is not None:
+                    yield record
             pending = (line, line_number)
-    if pending is not None:
-        parse_line(*pending, final=True)
-    diagnostics = diagnostics if diagnostics is not None else {}
-    diagnostics.update({"schema_version": 2, "source": os.path.abspath(path),
-                        "source_records_total": len(recs),
-                        "partial_tail_ignored": diagnostics.get("partial_tail_ignored", False)})
-    if any(r.get("type") == "response_item" for r in recs):
-        supported = {"message", "function_call", "custom_tool_call", "agent_message",
-                     "reasoning", "function_call_output", "custom_tool_call_output"}
-        response_types = [r.get("payload", {}).get("type") for r in recs
-                          if r.get("type") == "response_item"]
-        normalized = normalize_codex(recs)
-        known_top_level = {
-            "session_meta", "event_msg", "response_item", "world_state",
-            "turn_context", "inter_agent_communication_metadata", "compacted",
-        }
-        unknown_response_types = {str(t) for t in response_types if t not in supported}
-        unknown_top_level_types = {
-            str(r.get("type")) for r in recs if r.get("type") not in known_top_level
-        }
-        source_unknown = (
-            sum(1 for t in response_types if t not in supported) +
-            sum(1 for r in recs if r.get("type") not in known_top_level)
-        )
-        has_authoritative_compaction = any(r.get("type") == "compacted" for r in recs)
-        source_supported = sum(
-            1 for r in recs
-            if (r.get("type") == "response_item" and
-                r.get("payload", {}).get("type") in supported)
-            or r.get("type") == "compacted"
-            or (not has_authoritative_compaction and r.get("type") == "event_msg" and
-                r.get("payload", {}).get("type") == "context_compacted")
-        )
-        source_ignored = len(recs) - source_supported - source_unknown
-        compaction_boundaries = sum(
-            1 for r in normalized
+        if pending is not None:
+            record = parse_line(*pending, final=True)
+            if record is not None:
+                yield record
+
+
+def _copilot_source_class(record):
+    typ = str(record.get("type", ""))
+    data = record.get("data") if isinstance(record.get("data"), dict) else {}
+    if typ == "assistant.message_delta":
+        return "supported"
+    if typ == "assistant.streaming_delta":
+        return "supported" if any(
+            key in data for key in ("content", "delta", "text")
+        ) else "ignored"
+    if typ in _COPILOT_KNOWN_TYPES:
+        if typ not in {
+            "system.message", "user.message", "assistant.reasoning",
+            "assistant.message", "tool.execution_start", "tool.user_requested",
+            "tool.execution_complete", "session.compaction_complete", "session.error",
+        } or record.get("ephemeral"):
+            return "ignored"
+        return "supported"
+    if typ.endswith("_delta"):
+        return "ignored"
+    return "unknown"
+
+
+class _SourceDiagnostics:
+    """Keep source-wide coverage counters without retaining source records."""
+    def __init__(self, path):
+        self.path = path
+        self.total = 0
+        self.types = Counter()
+        self.response_types = Counter()
+        self.copilot_classes = Counter()
+        self.copilot_unknown = set()
+        self.claude_unknown_blocks = set()
+        self.normalized = 0
+        self.boundaries = 0
+        self.has_authoritative_compaction = False
+
+    def observe_source(self, record):
+        self.total += 1
+        typ = record.get("type")
+        self.types[typ] += 1
+        if typ == "compacted":
+            self.has_authoritative_compaction = True
+        if typ == "response_item":
+            payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+            self.response_types[payload.get("type")] += 1
+        copilot_class = _copilot_source_class(record)
+        self.copilot_classes[copilot_class] += 1
+        if copilot_class == "unknown":
+            self.copilot_unknown.add(str(typ))
+        if typ in {"system", "user", "assistant"}:
+            content = record.get("message", {}).get("content", [])
+            if isinstance(content, list):
+                for block in content:
+                    if not isinstance(block, dict):
+                        self.claude_unknown_blocks.add("<non-object>")
+                    elif block.get("type") not in _CLAUDE_KNOWN_BLOCK_TYPES:
+                        self.claude_unknown_blocks.add(str(block.get("type")))
+
+    def observe_normalized(self, records, client):
+        if client == "claude":
+            self.normalized += sum(
+                1 for r in records
+                if r.get("type") in {"system", "user", "assistant"} and not _discard(r)
+            )
+        else:
+            self.normalized += len(records)
+        self.boundaries += sum(
+            1 for r in records
             if r.get("type") == "system" and r.get("subtype") == "compact_boundary"
         )
+
+    def finish(self, client, diagnostics):
+        if diagnostics is None:
+            return
         diagnostics.update({
-            "client": "codex",
-            "source_records_supported": source_supported,
-            "source_records_ignored": source_ignored,
-            "source_records_unknown": source_unknown,
-            "normalized_records_emitted": len(normalized),
-            "unknown_types": sorted(unknown_response_types | unknown_top_level_types),
-            "compaction_boundaries": compaction_boundaries,
+            "schema_version": 2,
+            "source": os.path.abspath(self.path),
+            "source_records_total": self.total,
+            "partial_tail_ignored": diagnostics.get("partial_tail_ignored", False),
+            "client": client,
+            "normalized_records_emitted": self.normalized,
+            "compaction_boundaries": self.boundaries,
         })
-        return normalized
-    if is_copilot_events(recs):
-        normalized = normalize_copilot(recs)
-        known = {
-            "system.message", "user.message", "assistant.reasoning", "assistant.message",
-            "tool.execution_start", "tool.user_requested", "tool.execution_complete",
-            "session.compaction_complete", "session.error", "assistant.streaming_delta",
-            "tool.execution_partial_result", "tool.execution_progress",
-        }
-        unknown = {str(r.get("type")) for r in recs
-                   if r.get("type") not in known and not str(r.get("type", "")).endswith("_delta")}
-        source_unknown = sum(1 for r in recs if str(r.get("type")) in unknown)
-        ignored_types = {
-            "assistant.streaming_delta", "tool.execution_partial_result",
-            "tool.execution_progress",
-        }
-        source_ignored = sum(
-            1 for r in recs
-            if r.get("ephemeral") or r.get("type") in ignored_types
-            or str(r.get("type", "")).endswith("_delta")
-        )
-        source_supported = len(recs) - source_ignored - source_unknown
-        compaction_boundaries = sum(
-            1 for r in normalized
-            if r.get("type") == "system" and r.get("subtype") == "compact_boundary"
-        )
-        diagnostics.update({
-            "client": "copilot",
-            "source_records_supported": source_supported,
-            "source_records_ignored": source_ignored,
-            "source_records_unknown": source_unknown,
-            "normalized_records_emitted": len(normalized),
-            "unknown_types": sorted(unknown),
-            "compaction_boundaries": compaction_boundaries,
-        })
-        return normalized
-    known_claude_metadata = {"attachment", "mode"}
-    known_claude = {"system", "user", "assistant"} | _DISCARD_T | known_claude_metadata
-    supported_count = sum(1 for r in recs
-                          if r.get("type") in {"system", "user", "assistant"} and not _discard(r))
-    unknown_count = sum(1 for r in recs if r.get("type") not in known_claude)
-    diagnostics.update({
-        "client": "claude",
-        "source_records_supported": supported_count,
-        "source_records_ignored": sum(1 for r in recs
-                                      if _discard(r) or r.get("type") in known_claude_metadata),
-        "source_records_unknown": unknown_count,
-        "normalized_records_emitted": supported_count,
-        "unknown_types": sorted({str(r.get("type")) for r in recs
-                                 if r.get("type") not in known_claude}),
-        "compaction_boundaries": sum(
-            1 for r in recs
-            if r.get("type") == "system" and r.get("subtype") == "compact_boundary"
-        ),
-    })
-    return recs
+        if client == "deepseek":
+            known = DEEPSEEK_CORE_EVENT_TYPES | DEEPSEEK_STORAGE_EVENT_TYPES
+            ignored = DEEPSEEK_IGNORED_EVENT_TYPES
+            unknown_count = sum(count for typ, count in self.types.items() if typ not in known)
+            ignored_count = sum(self.types[typ] for typ in ignored)
+            diagnostics.update({
+                "source_records_supported": self.total - unknown_count - ignored_count,
+                "source_records_ignored": ignored_count,
+                "source_records_unknown": unknown_count,
+                "unknown_types": sorted(str(typ) for typ in self.types if typ not in known),
+            })
+        elif client == "codex":
+            unknown_response = {
+                str(typ) for typ in self.response_types
+                if typ not in _CODEX_SUPPORTED_RESPONSE_TYPES
+            }
+            unknown_top = {
+                str(typ) for typ in self.types
+                if typ not in _CODEX_KNOWN_TOP_LEVEL_TYPES
+            }
+            unknown_count = (
+                sum(count for typ, count in self.response_types.items()
+                    if typ not in _CODEX_SUPPORTED_RESPONSE_TYPES) +
+                sum(count for typ, count in self.types.items()
+                    if typ not in _CODEX_KNOWN_TOP_LEVEL_TYPES)
+            )
+            supported_count = sum(
+                count for typ, count in self.response_types.items()
+                if typ in _CODEX_SUPPORTED_RESPONSE_TYPES
+            ) + self.types["compacted"]
+            context_compacted = getattr(self, "codex_context_compacted", 0)
+            if not self.has_authoritative_compaction:
+                supported_count += context_compacted
+            diagnostics.update({
+                "source_records_supported": supported_count,
+                "source_records_ignored": self.total - supported_count - unknown_count,
+                "source_records_unknown": unknown_count,
+                "unknown_types": sorted(unknown_response | unknown_top),
+            })
+        elif client == "copilot":
+            diagnostics.update({
+                "source_records_supported": self.copilot_classes["supported"],
+                "source_records_ignored": self.copilot_classes["ignored"],
+                "source_records_unknown": self.copilot_classes["unknown"],
+                "unknown_types": sorted(self.copilot_unknown),
+            })
+        else:
+            supported = sum(
+                count for typ, count in self.types.items()
+                if typ in {"system", "user", "assistant"}
+            )
+            # Discarded system subtypes need record-level accounting.
+            supported -= getattr(self, "claude_discarded_conversation", 0)
+            ignored = getattr(self, "claude_discarded", 0) + sum(
+                self.types[typ] for typ in _CLAUDE_METADATA_TYPES
+            )
+            unknown = sum(
+                count for typ, count in self.types.items()
+                if typ not in _CLAUDE_KNOWN_TYPES
+            )
+            diagnostics.update({
+                "source_records_supported": supported,
+                "source_records_ignored": ignored,
+                "source_records_unknown": unknown,
+                "unknown_types": sorted(
+                    str(typ) for typ in self.types if typ not in _CLAUDE_KNOWN_TYPES
+                ),
+                "unknown_content_block_types": sorted(self.claude_unknown_blocks),
+            })
+
+
+class _ChainCollector:
+    """Incrementally merge assistant chunks and retain only selected chains."""
+    def __init__(self, chain_window):
+        self.chains = deque(maxlen=chain_window or None)
+        self.current = []
+        self.active_mid = None
+        self.active_index = None
+        self.total = 0
+
+    def consume(self, record):
+        if _discard(record):
+            return
+        if (record.get("type") == "system" and
+                record.get("subtype") == "compact_boundary"):
+            self._finish_chain()
+            return
+        if record.get("type") == "assistant":
+            message = record.get("message", {})
+            mid = message.get("id")
+            if mid and mid == self.active_mid and self.active_index is not None:
+                target = self.current[self.active_index]["message"]
+                target["content"].extend(message.get("content", []))
+                if message.get("stop_reason"):
+                    target["stop_reason"] = message["stop_reason"]
+                return
+            self.current.append(record)
+            if mid:
+                self.active_mid = mid
+                self.active_index = len(self.current) - 1
+            else:
+                self.active_mid = None
+                self.active_index = None
+            return
+        self.current.append(record)
+        self.active_mid = None
+        self.active_index = None
+
+    def _finish_chain(self):
+        if self.current:
+            self.chains.append(self.current)
+            self.total += 1
+        self.current = []
+        self.active_mid = None
+        self.active_index = None
+
+    def finish(self):
+        self._finish_chain()
+        first_index = self.total - len(self.chains) + 1
+        return list(enumerate(self.chains, first_index)), self.total
+
+
+class _StreamingNormalizer:
+    """Use the smallest client-safe buffer: record, turn, or DeepSeek turn."""
+    def __init__(self, client, emit, path):
+        self.client = client
+        self.emit = emit
+        self.path = path
+        self.buffer = []
+        self.deepseek_has_user = False
+        self.codex_authoritative_seen = False
+
+    def feed(self, record):
+        typ = record.get("type")
+        if self.client == "claude":
+            self.emit([record])
+        elif self.client == "codex":
+            if typ == "compacted":
+                self.codex_authoritative_seen = True
+                self.emit(normalize_codex_record(record))
+            elif (typ == "event_msg" and
+                  record.get("payload", {}).get("type") == "context_compacted" and
+                  self.codex_authoritative_seen):
+                self.emit([])
+            else:
+                self.emit(normalize_codex_record(record))
+        elif self.client == "copilot":
+            if typ == "user.message" and self.buffer:
+                self._flush()
+            self.buffer.append(record)
+            if typ in {"assistant.turn_end", "session.compaction_complete", "session.idle"}:
+                self._flush()
+        else:
+            if typ == "turn/start" and self.buffer:
+                self._flush()
+            if typ == "user/message" and self.deepseek_has_user:
+                self._flush()
+            self.buffer.append(record)
+            if typ == "user/message":
+                self.deepseek_has_user = True
+            if typ in {"turn/end", "compaction/start", "compaction/end"}:
+                self._flush()
+
+    def _flush(self):
+        if not self.buffer:
+            return
+        try:
+            if self.client == "copilot":
+                normalized = normalize_copilot(self.buffer)
+            else:
+                normalized = normalize_deepseek(self.buffer)
+        except ValueError as exc:
+            raise VCCError(f"{self.path}: {exc}") from exc
+        self.buffer = []
+        self.deepseek_has_user = False
+        self.emit(normalized)
+
+    def finish(self):
+        self._flush()
+
+
+def load_chains(path, chain_window=0, tolerate_partial_tail=True, diagnostics=None):
+    """Stream a source into merged chains, retaining at most ``chain_window`` chains."""
+    stats = _SourceDiagnostics(path)
+    collector = _ChainCollector(chain_window)
+    client = None
+    pending = []
+    normalizer = None
+
+    def emit(records):
+        stats.observe_normalized(records, client)
+        for record in records:
+            collector.consume(record)
+
+    def start(selected_client):
+        nonlocal client, normalizer, pending
+        client = selected_client
+        normalizer = _StreamingNormalizer(client, emit, path)
+        buffered, pending = pending, []
+        for item in buffered:
+            normalizer.feed(item)
+
+    for record in _iter_source_records(path, tolerate_partial_tail, diagnostics):
+        stats.observe_source(record)
+        if (record.get("type") == "event_msg" and
+                record.get("payload", {}).get("type") == "context_compacted"):
+            stats.codex_context_compacted = getattr(stats, "codex_context_compacted", 0) + 1
+        if _discard(record):
+            stats.claude_discarded = getattr(stats, "claude_discarded", 0) + 1
+            if record.get("type") in {"system", "user", "assistant"}:
+                stats.claude_discarded_conversation = getattr(
+                    stats, "claude_discarded_conversation", 0
+                ) + 1
+        if client is not None:
+            normalizer.feed(record)
+            continue
+        pending.append(record)
+        typ = record.get("type")
+        if len(pending) == 1 and typ == "session":
+            start("deepseek")
+        elif typ == "response_item":
+            start("codex")
+        elif is_copilot_record(record):
+            start("copilot")
+        elif typ in _CLAUDE_KNOWN_TYPES:
+            start("claude")
+
+    if client is None:
+        start("claude")
+    normalizer.finish()
+    indexed_chains, total_chains = collector.finish()
+    stats.finish(client, diagnostics)
+    return indexed_chains, total_chains
 
 
 def collect_stats(chain):
@@ -290,49 +559,6 @@ def _preprocess_tool_text(text, tool_name):
         lines.append(line)
     return "\n".join(lines)
 
-def _discard(r):
-    t = r.get("type")
-    return t in _DISCARD_T or (t == "system" and r.get("subtype") in _DISCARD_S)
-
-def merge_chunks(recs):
-    merged = []
-    active_mid = None
-    active_idx = None
-    for r in recs:
-        if r.get("type") == "assistant":
-            m = r.get("message", {})
-            mid = m.get("id")
-            if mid and mid == active_mid and active_idx is not None:
-                merged[active_idx]["message"]["content"].extend(m.get("content", []))
-                if m.get("stop_reason"):
-                    merged[active_idx]["message"]["stop_reason"] = m["stop_reason"]
-            else:
-                merged.append(r)
-                if mid:
-                    active_mid = mid
-                    active_idx = len(merged) - 1
-                else:
-                    active_mid = None
-                    active_idx = None
-        else:
-            merged.append(r)
-            if not _discard(r):
-                active_mid = None
-                active_idx = None
-    return merged
-
-def split_chains(recs):
-    kept = [r for r in recs if not _discard(r)]
-    chains, cur = [], []
-    for r in kept:
-        if r.get("type") == "system" and r.get("subtype") == "compact_boundary":
-            if cur: chains.append(cur)
-            cur = []
-        else:
-            cur.append(r)
-    if cur: chains.append(cur)
-    return chains
-
 # ── image / doc ──
 
 def _media_ext(media_type, default_ext):
@@ -438,16 +664,19 @@ def build_ir(chain, outdir, data_prefix, data_ctr, extract_media=True,
         if sec > 0:
             ir.append(_node("meta", ["", SEP]))
 
-    def _emit_header(h):
+    def _emit_header(h, **metadata):
         ir.append(_node(
             "meta_header", [h, ""], _sec=sec,
             _event_timestamp=active_timestamp,
+            **metadata,
         ))
 
     def _emit_blocks(blocks, text_type):
         nonlocal blk
         has_any = False
         for b in blocks:
+            if not isinstance(b, dict):
+                b = {"type": "<non-object>", "value": b}
             bt = b.get("type")
             if bt == "thinking":
                 txt = _sanitize(b.get("thinking", ""))
@@ -480,7 +709,7 @@ def build_ir(chain, outdir, data_prefix, data_ctr, extract_media=True,
                 hl = f">>>tool_call {name}:{_short_tid(tid)}"
                 summary = _tool_summary(name, inp)
                 ir.append(_node("meta", [hl], _sec=sec, _blk=blk,
-                                 _tool_summary=summary))
+                                 _tool_summary=summary, _tool_id=tid))
                 if inp:
                     ir.append(_node("tool_call", emit_mapping(inp).split("\n"),
                                      searchable=True, _sec=sec, _blk=blk))
@@ -509,6 +738,14 @@ def build_ir(chain, outdir, data_prefix, data_ctr, extract_media=True,
                     label = f"[document: {fn}]"
                 ir.append(_node(f"{text_type}_document", [label],
                                  searchable=True, _sec=sec, _blk=blk))
+                blk += 1; has_any = True
+            else:
+                label = f"[unsupported content block: {bt}]"
+                payload = json.dumps(b, ensure_ascii=False, indent=2, default=str)
+                ir.append(_node(
+                    f"{text_type}_unknown", [label] + _sanitize(payload).split("\n"),
+                    searchable=True, _sec=sec, _blk=blk,
+                ))
                 blk += 1; has_any = True
         return has_any
 
@@ -546,8 +783,10 @@ def build_ir(chain, outdir, data_prefix, data_ctr, extract_media=True,
                                      _sec=sec, _blk=blk))
                     blk += 1; sec += 1
             elif isinstance(content, list):
-                tblocks = [b for b in content if b.get("type") != "tool_result"]
-                tresults = [b for b in content if b.get("type") == "tool_result"]
+                tblocks = [b for b in content
+                           if not isinstance(b, dict) or b.get("type") != "tool_result"]
+                tresults = [b for b in content
+                            if isinstance(b, dict) and b.get("type") == "tool_result"]
                 if tblocks:
                     mark = len(ir)
                     saved_data = data_ctr[0]
@@ -565,7 +804,8 @@ def build_ir(chain, outdir, data_prefix, data_ctr, extract_media=True,
                     nm = tid_name.get(tuid, "unknown")
                     role = "tool_error" if is_err else "tool"
                     btype = "tool_error" if is_err else "tool_result"
-                    _emit_sep(); _emit_header(f"[{role}] {nm}:{_short_tid(tuid)}")
+                    _emit_sep(); _emit_header(
+                        f"[{role}] {nm}:{_short_tid(tuid)}", _tool_id=tuid)
                     tc = tr.get("content", "")
                     parts = []
                     if isinstance(tc, str):
@@ -592,20 +832,18 @@ def build_ir(chain, outdir, data_prefix, data_ctr, extract_media=True,
                                           if extract_media else "embedded document omitted in search-only mode")
                                     data_ctr[0] += 1
                                     parts.append(f"[document: {fn}]")
+                            else:
+                                parts.append(
+                                    f"[unsupported tool result block: {item.get('type')}]\n" +
+                                    json.dumps(item, ensure_ascii=False, indent=2, default=str)
+                                )
                     ir.append(_node(btype, _sanitize("\n\n".join(parts)).split("\n"),
                                      searchable=True, _sec=sec, _blk=blk))
                     blk += 1; sec += 1
 
         elif rt == "assistant":
             blocks = r.get("message", {}).get("content", [])
-            has = any(
-                (b.get("type") == "thinking" and b.get("thinking")) or
-                b.get("type") == "redacted_thinking" or
-                (b.get("type") == "text" and b.get("text")) or
-                b.get("type") == "tool_use" or
-                b.get("type") == "image" or
-                b.get("type") == "document"
-                for b in blocks)
+            has = bool(blocks)
             if has:
                 _emit_sep(); _emit_header("[assistant]")
                 _emit_blocks(blocks, "assistant")

@@ -5,7 +5,7 @@ description: "Search supported local agent-session history with VCC block refere
 
 # Search Chat
 
-Use VCC's deterministic priority tiers; do not reimplement discovery with ad hoc shell loops.
+As a VCC companion skill, use VCC's deterministic priority tiers; do not reimplement discovery with ad hoc shell loops.
 
 1. Resolve `../conversation-compiler/scripts/VCC.py` relative to this skill directory. If missing, search installed skill roots for `conversation-compiler/scripts/VCC.py`; stop with a clear dependency error if unavailable.
 2. Select source scope:

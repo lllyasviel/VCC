@@ -31,7 +31,12 @@ class SkillStructureTests(unittest.TestCase):
                 if line.startswith("description:")
             )
             self.assertLessEqual(len(description), 200, name)
-            self.assertTrue((skill / "agents" / "openai.yaml").is_file(), name)
+            self.assertIn("VCC", description, name)
+            openai_yaml = skill / "agents" / "openai.yaml"
+            self.assertTrue(openai_yaml.is_file(), name)
+            interface = openai_yaml.read_text(encoding="utf-8")
+            self.assertIn('display_name: "VCC ', interface, name)
+            self.assertIn('short_description: "VCC:', interface, name)
 
     def test_companion_runtime_and_public_docs_exist(self):
         scripts = SKILLS / "conversation-compiler" / "scripts"
@@ -50,14 +55,14 @@ class SkillStructureTests(unittest.TestCase):
 
     def test_public_docs_report_release_status_and_roadmap(self):
         markers = {
-            "README.md": ("## Current status and roadmap", "single-pass"),
-            "README_cn.md": ("## 当前状态和后续方向", "单遍"),
-            "README_jp.md": ("## 現在の状態とロードマップ", "single-pass"),
+            "README.md": ("## Current status and roadmap", "streaming normalizer"),
+            "README_cn.md": ("## 当前状态和后续方向", "streaming normalizer"),
+            "README_jp.md": ("## 現在の状態とロードマップ", "streaming normalizer"),
         }
         for filename, (heading, roadmap_marker) in markers.items():
             text = (ROOT / filename).read_text(encoding="utf-8")
             self.assertIn(heading, text, filename)
-            self.assertIn("VCC 2.3.1", text, filename)
+            self.assertIn("VCC 2.3.2", text, filename)
             self.assertIn(roadmap_marker, text, filename)
 
     def test_entry_skills_use_portable_sibling_runtime_reference(self):

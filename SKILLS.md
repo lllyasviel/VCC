@@ -25,7 +25,7 @@ VCC descriptions therefore:
 - retain high-value anchors such as `/readchat`, `events.jsonl`, rollout logs, continuation summaries, and compaction recovery;
 - refer to supported agent sessions instead of enumerating every client;
 - keep client support details in the READMEs and runtime tests;
-- remain at or below 200 characters so the same skill can be uploaded through Claude.ai and Cowork, even though the general Agent Skills specification permits longer descriptions.
+- remain at or below the Claude.ai and Cowork upload limit of [200 characters](https://support.claude.com/en/articles/12512198-how-to-create-custom-skills), even though the general Agent Skills specification permits longer descriptions.
 
 When adding a client, update parser support, fixtures, diagnostics, and the README support table. Do not expand all four descriptions with another product name.
 

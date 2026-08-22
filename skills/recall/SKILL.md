@@ -1,11 +1,11 @@
 ---
 name: recall
-description: "Recover actionable context from a supported past agent session and verify current state. Use for /recall, resuming work, referenced sessions, continuation summaries, or compaction recovery."
+description: "Recover and verify context from a supported past agent session with VCC. Use for /recall, resuming work, referenced sessions, continuation summaries, or compaction recovery."
 ---
 
 # Recall
 
-Recover the original conversation first, then reconcile it with current reality.
+As a VCC companion skill, recover the original conversation first, then reconcile it with current reality.
 
 1. Use an explicit JSONL path when provided. For current-session compaction, first resolve the current session/thread identifier or source path from explicit runtime metadata and open that exact log; locate the newest compaction boundary and recover the preceding exchange. Only use content search when current-session identity is unavailable. For other requests, locate the session using the prioritized platform procedure below. Do not treat a continuation summary as authoritative.
 2. Resolve `../conversation-compiler/scripts/VCC.py` relative to this skill directory. If missing, search installed skill roots for `conversation-compiler/scripts/VCC.py`; stop with a clear dependency error if unavailable.

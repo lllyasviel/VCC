@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README_cn.md) | [日本語](README_jp.md)
 
-VCC はローカルの agent セッション JSONL を、読みやすく検索可能な transcript view にコンパイルします。block の役割と安定した行範囲参照を保持し、GitHub Copilot CLI、Codex、Claude Code の形式を自動判別します。
+VCC はローカルの agent セッション JSONL を、読みやすく検索可能な transcript view にコンパイルします。block の役割と安定した行範囲参照を保持し、GitHub Copilot CLI、Codex、Claude Code、DeepSeek Harness の形式を自動判別します。
 
 VCC は “View-oriented Conversation Compiler for Agent Trace Analysis” の実装です（[論文](https://arxiv.org/abs/2603.29678)）。学術実験の再現用コードは [VCC-experiments](https://github.com/lllyasviel/VCC-experiments) にあります。
 
@@ -13,12 +13,13 @@ VCC は “View-oriented Conversation Compiler for Agent Trace Analysis” の�
 | GitHub Copilot CLI | `${COPILOT_HOME:-$HOME/.copilot}/session-state/*/events.jsonl` | message、reasoning、tool、result、compaction |
 | Codex | `${CODEX_HOME:-$HOME/.codex}/sessions/YYYY/MM/DD/rollout-*.jsonl` | message、function/custom tool event |
 | Claude Code | `$HOME/.claude/projects/**/*.jsonl` | message、thinking、tool、result、compaction |
+| DeepSeek Harness | `${DSH_HOME:-$HOME/.dsh}/sessions/**/session.jsonl[.zstd]` | message、reasoning、tool、result、compaction |
 
 元の JSONL が常に正本です。生成 view は再生成可能な派生データで、進行中のセッションが追記されると古くなります。
 
 ### Default source priority
 
-`searchchat` と `recall` は常に 3 client を同時検索するわけではありません。
+`searchchat` と `recall` は常にすべての client を同時検索するわけではありません。
 
 1. ユーザーが明示した client または client set を最優先。
 2. global/cross-platform が明示された場合は全ての既存 source を検索。
@@ -107,9 +108,9 @@ Cache は再生成できます。入力 JSONL の更新や VCC の upgrade 後�
 
 単一 literal は `--literal`、複数 anchor は反復 `--term` と `--match all|any`、regex が必要な場合だけ `--grep` を使います。`--format json|ndjson` は source、role、full-view range、matched pattern、matching line、決定的 score を含む versioned block record を出力します。user/assistant match は説明のない tool output より上位ですが、ranking は候補選択用で結論の証拠ではありません。
 
-`history-search` は Copilot、Codex、Claude root を列挙し、明示された current client を最初に検索し、no/weak match の場合だけ既定で拡張します。current client が不明なら全 source fallback を報告します。`--current-session` は compaction recovery 用の exact first tier です。
+`history-search` は Copilot、Codex、Claude、DeepSeek Harness root を列挙し、明示された current client を最初に検索し、no/weak match の場合だけ既定で拡張します。current client が不明なら全 source fallback を報告します。`--current-session` は compaction recovery 用の exact first tier です。
 
-各 structured match は、利用可能な場合に source event 由来の `event_timestamp` を含み、text output では `event=...` と表示します。これは一致した message または tool event の時刻であり、実験開始時刻や artifact 生成時刻を自動的に意味しません。その区別が必要なら隣接する tool call を確認してください。session path 内の日付は client が session を archive または最初に作成した場所を示すだけで、session 再利用時には match 時刻と異なる場合があります。
+各 structured match は、利用可能な場合に source event 由来の `event_timestamp` を含み、text output では `event=...` と表示します。これは一致した message または tool event の時刻であり、実験開始時刻や artifact 生成時刻を自動的に意味しません。その区別が必要なら隣接する tool call を確認してください。history result は score、source tier、source file の更新時刻、より新しい matching block の順で ranking されます。`source_mtime_ns` は file-level tie-breaker であり、event timestamp ではありません。session path 内の日付は client が session を archive または最初に作成した場所を示すだけで、session 再利用時には match 時刻と異なる場合があります。
 
 Diagnostics schema v2 は source accounting と normalized output を分離します。`source_records_supported + source_records_ignored + source_records_unknown` は常に `source_records_total` と一致し、1 source event が複数 record を生成できるため `normalized_records_emitted` は異なる場合があります。`recall_selection` は pre-compaction と latest brief view を直接示します。
 
@@ -119,7 +120,7 @@ Recall では `--chain-window 2` を渡し、選択された 2 chain だけを m
 
 VCC は各入力に対して次の決定的 pipeline を実行します。
 
-1. JSONL を逐次 lex し、Copilot、Codex、Claude の形式を判定。
+1. JSONL を逐次 lex し、Copilot、Codex、Claude、DeepSeek Harness の形式を判定。
 2. client 固有の message/tool event を共通 record に normalize。
 3. streamed assistant chunk を merge し、compaction chain を split。
 4. message、reasoning、tool、result、media を IR に parse。
@@ -132,7 +133,7 @@ Executable entry point は意図的に薄く保ち、実装は一方向依存の
 | Module | 責務 |
 |---|---|
 | `common.py` | 共通 version、limit、error、text utility |
-| `normalizers.py` | Codex と GitHub Copilot 固有 schema adapter |
+| `normalizers.py` | Codex、GitHub Copilot、DeepSeek Harness 固有の schema adapter |
 | `parser.py` | client 判定、JSONL validation、chain/media、diagnostics、IR 構築 |
 | `renderer.py` | stable line assignment と full/brief/focused lowering |
 | `query.py` | block match、deterministic score、source limit、text/JSON/NDJSON output |
@@ -146,19 +147,18 @@ Base64 media は materialized view の場合だけ decode され、`--search-onl
 
 ## 時間・空間計算量
 
-1 file について `C` を text/JSON サイズ、`R` を record 数、`B` を IR node/section 数、`L` を出力サイズ、`M` を media 総 byte 数、`Mmax` を最大の単一 decoded payload、`F` を入力 file 数とします。
+1 file について `C` を text/JSON サイズ、`R` を record 数、`B` を IR node/section 数、`L` を出力サイズ、`M` を media 総 byte 数、`Mmax` を最大の単一 decoded payload、`W` を `--chain-window` が保持する normalized content（`0` では全 chain）、`T` を client-safe normalization に必要な最大 segment（通常は 1 record または 1 turn）、`F` を入力 file 数とします。
 
 | Stage | Time | Peak memory / disk |
 |---|---|---|
 | Input 展開 + mtime sort | `O(F log F)` | `O(F)` path |
-| Lex + normalize | `O(C + R)` | `O(R)` parsed record と current raw line |
-| Merge + chain split | `O(R)` | `O(R)` |
-| Parse + IR | `O(C + B + M)` | transient memory `O(C + B + Mmax)`、media `O(M)` |
+| Streaming lex + normalize + chain selection | `O(C + R)` | `--chain-window` 使用時 `O(W + T)`、全 chain 保持時 `O(C + R)` |
+| Parse + IR | `O(W + B + M)` | transient memory `O(W + B + Mmax)`、media `O(M)` |
 | Line assignment + emit | `O(B + L)` | buffer `O(L)` |
 | Brief/focused lowering | `O(C + B)` | section/visibility index を IR ごとに一度構築 |
 | Regex match | pattern 依存 | 単純 pattern は通常 `O(C)` に近いが、病的な Python `re` は超線形 backtracking の可能性あり |
 
-Regex pattern 依存の挙動を除き、materialized file 1 件は `O(C + B + L + M)`、peak working memory は `O(C + B + L + Mmax)` です。各結果を次の file の前に明示的に解放するため、peak は合計ではなく最大 file に依存します。
+Regex pattern 依存の挙動を除き、materialized file 1 件の処理時間は content と output に対して線形です。chain window が bounded の場合、peak working memory は全 source record に比例せず `O(W + T + B + L + Mmax)` です。`--chain-window 0` で全 chain を保持する場合は `O(C + R + B + L + Mmax)` が必要です。各結果は次の file の前に解放されるため、peak は合計ではなく最大 file に依存します。
 
 1 materialized file の persistent disk は `O(Lfull + Lbrief + Lview + M)` です。複数 file では各項の合計に `O(F)` の小さな metadata が加わります。`--search-only` の persistent output は `O(1)` で、埋め込み media を decode しません。
 
@@ -170,36 +170,46 @@ Valid-cache check は POSIX filesystem では source size に対して `O(1)` �
 
 Console の `words` は OpenAI、Anthropic、GitHub の model token 数ではありません。VCC 独自の軽量 tokenizer による相対サイズです。
 
+Token cost には 3 つの異なる layer があります。以下は現在の repository size の実測であり、model tokenizer の正確な token 数を保証するものではありません。
+
+| Layer | 現在の size または behavior | 通常の影響 |
+|---|---|---|
+| Skill discovery | 4 description の合計 722 characters | 小さい。どの skill を load するかの routing に使用 |
+| 呼び出された instruction | `conversation-compiler` 4.96 KB、`readchat` 2.17 KB、`recall` 4.45 KB、`searchchat` 3.01 KB | 小〜中。通常は呼び出された skill body だけを load |
+| VCC execution | local Python、API token は 0 | stdout または file が読まれるまで model cost はない |
+| Search/view consumption | 返された match と agent が読む transcript text に比例 | 通常は VCC 関連 token cost の大部分 |
+
+4 companion skill をすべて install しても、毎回 4 つの instruction body がすべて load されるわけではありません。host は routing 用の短い description を公開し、適用する skill だけを load できます。正確な behavior は agent host に依存します。host wrapper、tool-call message、reasoning、final response も token を消費しますが、VCC 自体の execution cost ではありません。
+
 `U` を user block 数、`A` を assistant text block 数、`Stool` を出力された tool summary の lexical 総量、`tu` を `-tu`、`t` を `-t` とすると：
 
 - Full view は概ね `Θ(Cvisible)` の lexical content。
 - Brief view は概ね `O(U·tu + A·t + Stool + headers)`。thinking と tool-result 本文は通常除外。path や pattern など一部 summary field には固定上限がありません。
 - Focused/search output は全 transcript ではなく matching line と block metadata に比例。
 
-Token を最小化するには、`--search-only` → 選択 session だけ materialize → `.min.txt` → 必要な `.txt` range の順で読みます。正確な token 数は実際に view を読む model の tokenizer で測定してください。
+Token を最小化するには、`--search-only` で match 数を制限 → `--chain-window 2` で選択 session だけ materialize → `.min.txt` → 必要な `.txt` range の順で読みます。focused range で十分な場合、`.txt` 全体を context に入れないでください。正確な token 数は実際に view を読む model の tokenizer で測定してください。
 
 ## 現在の状態とロードマップ
 
-VCC 2.3.1 は個人 workflow、local team での利用、public beta に利用できる状態です。ただし、集中型 multi-tenant conversation-history service を目的としていません。現在検証済みの範囲では、release を妨げる既知の P0/P1 issue はありません。
+VCC 2.3.2 は個人 workflow、local team での利用、public beta に利用できる状態です。ただし、集中型 multi-tenant conversation-history service を目的としていません。現在検証済みの範囲では、release を妨げる既知の P0/P1 issue はありません。
 
 現在の release 根拠：
 
-- Codex、Claude Code、GitHub Copilot CLI log の deterministic な parse と search。
-- 44 件の自動 test、4 件の skill-package validator、3 client を対象とする代表的な sanitized fixture。
+- Codex、Claude Code、GitHub Copilot CLI、DeepSeek Harness log の deterministic な parse と search。
+- 54 件の自動 test、4 件の skill-package validator、4 client を対象とする代表的な sanitized fixture。
 - 複数の compaction boundary を含む実際の Codex session による検証。
 - 対応 Python 範囲での Linux、macOS、Windows CI と、再現可能な benchmark tool。
 - media decode 上限、cache integrity check、conservative regex guard、source-aware recall selection。
 
-Source JSONL が常に正本です。生成 view と cache は派生成果物であり、使用後に削除できます。反復検索の利点が storage と privacy cost を上回る場合だけ、非公開で保持してください。`--chain-window` は後段の IR、render、disk、agent context cost を削減しますが、normalize は現在の入力の parsed record を保持するため、非常に大きな単一 session では file size に比例した memory が必要です。
+Source JSONL が常に正本です。生成 view と cache は派生成果物であり、使用後に削除できます。反復検索の利点が storage と privacy cost を上回る場合だけ、非公開で保持してください。streaming normalizer は raw line を 1 行ずつ読み、client semantics に必要な最小 unit だけを buffer し、選択された chain だけを保持します。ローカルの 100,000-record、47.9 MB synthetic Codex benchmark で `--chain-window 2` を使用した結果、peak RSS は 244 MB から 19.8 MB、elapsed time は 0.459 秒から 0.339 秒になりました。結果は platform と workload により異なります。
 
 優先する今後の改善：
 
-1. 各 client に stateful single-pass streaming normalizer を実装し、deterministic output を維持しながら巨大 log の peak memory を削減する。
-2. Client format の変化に合わせ、実際の schema fixture、schema-drift check、malformed-input test、fuzz coverage を拡充する。
-3. OS に依存しない regex execution isolation または hard timeout を追加する。現在の guard は意図的に保守的で、`--allow-unsafe-regex` は明示的な escape hatch です。
-4. より大きな benchmark tier、peak RSS、長時間の cache behavior で performance regression を追跡する。
-5. Reliable な replacement identity を提供しない filesystem 向けに optional cross-platform high-integrity hash mode を追加する。Windows hash は既に automatic です。
-6. 実測 workload が必要性を示した場合だけ、opt-in かつ privacy-preserving な incremental content index を検討する。既定では raw conversation text を permanent index に複製しません。
+1. Client format の変化に合わせ、実際の schema fixture、schema-drift check、malformed-input test、fuzz coverage を拡充する。
+2. OS に依存しない regex execution isolation または hard timeout を追加する。現在の guard は意図的に保守的で、`--allow-unsafe-regex` は明示的な escape hatch です。
+3. より大きな benchmark tier、peak RSS、長時間の cache behavior で performance regression を追跡する。
+4. Reliable な replacement identity を提供しない filesystem 向けに optional cross-platform high-integrity hash mode を追加する。Windows hash は既に automatic です。
+5. 実測 workload が必要性を示した場合だけ、opt-in かつ privacy-preserving な incremental content index を検討する。既定では raw conversation text を permanent index に複製しません。
 
 将来の client schema は fixture と test で確認されるまで互換とはみなしません。VCC は session data を upload せず、cloud service に依存しません。
 

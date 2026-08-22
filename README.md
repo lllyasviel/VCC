@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README_cn.md) | [日本語](README_jp.md)
 
-VCC compiles local agent-session JSONL into readable, searchable transcript views with stable block roles and line-range references. It supports GitHub Copilot CLI, Codex, and Claude Code and detects their record formats automatically.
+VCC compiles local agent-session JSONL into readable, searchable transcript views with stable block roles and line-range references. It supports GitHub Copilot CLI, Codex, Claude Code, and DeepSeek Harness and detects their record formats automatically.
 
 VCC is the implementation accompanying “View-oriented Conversation Compiler for Agent Trace Analysis” ([paper](https://arxiv.org/abs/2603.29678)). Academic reproduction materials live in [VCC-experiments](https://github.com/lllyasviel/VCC-experiments).
 
@@ -13,6 +13,7 @@ VCC is the implementation accompanying “View-oriented Conversation Compiler fo
 | GitHub Copilot CLI | `${COPILOT_HOME:-$HOME/.copilot}/session-state/*/events.jsonl` | messages, reasoning, tools, results, compaction |
 | Codex | `${CODEX_HOME:-$HOME/.codex}/sessions/YYYY/MM/DD/rollout-*.jsonl` | messages and function/custom tool events |
 | Claude Code | `$HOME/.claude/projects/**/*.jsonl` | messages, thinking, tools, results, compaction |
+| DeepSeek Harness | `${DSH_HOME:-$HOME/.dsh}/sessions/**/session.jsonl[.zstd]` | messages, reasoning, tools, results, compaction |
 
 The source JSONL remains authoritative. Generated views are reproducible derivatives and can become stale when a live session is appended.
 
@@ -107,9 +108,9 @@ Valid full/brief cache entries are reused by default. Canonical source path, siz
 
 Use `--literal` for one exact literal string, repeated `--term` with `--match all|any` for multi-anchor queries, and `--grep` only for regex. `--format json|ndjson` emits schema-versioned block records containing source, role, full-view range, matched patterns, matching lines, and a deterministic relevance score. User and assistant matches outrank unexplained tool output; ranking chooses candidates but is not evidence of a conclusion.
 
-`history-search` enumerates Copilot, Codex, and Claude roots, searches the explicitly supplied current client first, and expands only on no/weak matches unless scope or expansion is overridden. If the current client is unknown, it searches all sources and reports that fallback. `--current-session` adds an exact first tier for compaction recovery.
+`history-search` enumerates Copilot, Codex, Claude, and DeepSeek Harness roots, searches the explicitly supplied current client first, and expands only on no/weak matches unless scope or expansion is overridden. If the current client is unknown, it searches all sources and reports that fallback. `--current-session` adds an exact first tier for compaction recovery.
 
-Each structured match includes `event_timestamp`, taken from the matched source event when available. Text output labels it as `event=...`. Treat this as the time of the matching message or tool event, not automatically as the time an experiment started or an artifact was produced; inspect adjacent tool calls when that distinction matters. Dates embedded in session paths identify where a client archived or first created the session and may differ from the matching event time when a session is reused.
+Each structured match includes `event_timestamp`, taken from the matched source event when available. Text output labels it as `event=...`. Treat this as the time of the matching message or tool event, not automatically as the time an experiment started or an artifact was produced; inspect adjacent tool calls when that distinction matters. History ranking orders matches by score, then source tier, source modification time, and newest matching block. `source_mtime_ns` reports the file tie-breaker and is not an event timestamp. Dates embedded in session paths identify where a client archived or first created the session and may differ from the matching event time when a session is reused.
 
 Diagnostics schema v2 separates source accounting from normalized output. `source_records_supported + source_records_ignored + source_records_unknown` always equals `source_records_total`; `normalized_records_emitted` may differ because one source event can emit multiple normalized records. `recall_selection` identifies the pre-compaction and latest brief views so an agent can skip older chains by default.
 
@@ -123,7 +124,7 @@ VCC lexes supported formats, normalizes them into one conversation model, parses
 
 For each input file, VCC runs this deterministic pipeline:
 
-1. **Lex** JSONL records incrementally and detect Copilot, Codex, or Claude format.
+1. **Lex** JSONL records incrementally and detect Copilot, Codex, Claude, or DeepSeek Harness format.
 2. **Normalize** client-specific messages and tool events into one record model.
 3. **Merge and split** streamed assistant chunks and compaction chains.
 4. **Parse** messages, reasoning, tools, results, and media references into an intermediate representation (IR).
@@ -136,7 +137,7 @@ The executable is intentionally thin. The implementation lives in `scripts/vcc/`
 | Module | Responsibility |
 |---|---|
 | `common.py` | Shared version, limits, errors, and text utilities |
-| `normalizers.py` | Codex and GitHub Copilot client-specific schema adapters |
+| `normalizers.py` | Codex, GitHub Copilot, and DeepSeek Harness schema adapters |
 | `parser.py` | Client detection, JSONL validation, chain construction, media handling, diagnostics, and IR construction |
 | `renderer.py` | Stable line assignment and full, brief, and focused view lowering |
 | `query.py` | Block matching, deterministic scoring, per-source limiting, and text/JSON/NDJSON output |
@@ -157,19 +158,20 @@ Let, for one file:
 - `B` be IR node/section count;
 - `L` be rendered output size;
 - `M` be total decoded media bytes and `Mmax` the largest single decoded payload;
+- `W` be normalized content retained by `--chain-window` (all chains when it is `0`);
+- `T` be the largest client-safe normalization segment, normally one record or turn;
 - `F` be the number of input files.
 
 | Stage | Time | Peak memory / disk notes |
 |---|---|---|
 | Input expansion and mtime sort | `O(F log F)` | `O(F)` paths |
-| Lex + normalize | `O(C + R)` | `O(R)` parsed records plus the current raw line |
-| Merge + chain split | `O(R)` | `O(R)` |
-| Parse + IR construction | `O(C + B + M)` | `O(C + B + Mmax)` transient memory; up to `O(M)` media output |
+| Streaming lex + normalize + chain selection | `O(C + R)` | `O(W + T)` with `--chain-window`; `O(C + R)` when retaining all chains |
+| Parse + IR construction | `O(W + B + M)` | `O(W + B + Mmax)` transient memory; up to `O(M)` media output |
 | Line assignment + emit | `O(B + L)` | up to `O(L)` rendered buffers |
 | Brief/focused lowering | `O(C + B)` | section and visibility indexes are built once per IR |
 | Regex matching | pattern-dependent | simple/literal patterns are usually near `O(C)`; pathological Python `re` patterns can backtrack superlinearly |
 
-Therefore one materialized file is linear in its content and output aside from pattern-dependent regex behavior, with bound `O(C + B + L + M)`. Peak working memory is `O(C + B + L + Mmax)` for the current file. VCC explicitly releases each file's result before processing the next, so peak working memory is based on the largest file rather than the sum of all files.
+Therefore one materialized file is linear in its content and output aside from pattern-dependent regex behavior. With a bounded chain window, peak working memory is `O(W + T + B + L + Mmax)` rather than proportional to every source record; with `--chain-window 0`, retaining all chains still requires `O(C + R + B + L + Mmax)`. VCC releases each file's result before processing the next, so peak working memory is based on the largest file rather than the sum of all files.
 
 Persistent disk usage for one materialized file is `O(Lfull + Lbrief + Lview + M)`; across files it is the sum of those terms plus `O(F)` small cache metadata. `--search-only` uses `O(1)` persistent output space and does not decode embedded media.
 
@@ -181,36 +183,46 @@ Running `VCC.py` consumes **zero LLM/API tokens**: it is a local deterministic P
 
 The console's `words` count is not an OpenAI, Anthropic, or GitHub model-token count. VCC's lightweight tokenizer groups letter/digit runs, counts punctuation separately, and ignores whitespace, so use it only as a relative size estimate.
 
+Token cost has three distinct layers. Current repository measurements are sizes, not model-token guarantees:
+
+| Layer | Current size or behavior | Typical impact |
+|---|---|---|
+| Skill discovery | Four descriptions total 722 characters | Small; descriptions help the agent decide which skill to load |
+| Invoked instructions | `conversation-compiler` 4.96 KB, `readchat` 2.17 KB, `recall` 4.45 KB, `searchchat` 3.01 KB | Small to moderate; normally only the invoked skill body is loaded |
+| VCC execution | Local Python, zero API tokens | No model cost until stdout or files are read |
+| Search/view consumption | Proportional to returned matches and transcript text read by the agent | Usually the dominant VCC-related token cost |
+
+Installing all four companion skills does not imply loading all four instruction bodies for every request. The host may expose their short descriptions for routing, then load only the applicable skill. Exact behavior depends on the agent host, and its wrappers, tool-call messages, reasoning, and final response also consume tokens independently of VCC.
+
 Let `U` be retained user blocks, `A` retained assistant text blocks, `S_tool` the total lexical size of emitted tool-call summaries, `tu` the `-tu` limit, and `t` the `-t` limit:
 
 - Full-view context is approximately proportional to all visible transcript text: `Θ(Cvisible)` lexical content.
 - Brief-view content is roughly bounded by `O(U·tu + A·t + S_tool + headers)` VCC lexical units; thinking and tool-result bodies are normally omitted. Some summary fields, such as paths and patterns, are not length-capped.
 - Focused/search output is proportional to matching lines plus block metadata, not the complete transcript.
 
-For lowest agent token use: run `--search-only`, materialize only selected sessions, read `.min.txt`, and open only cited `.txt` ranges. Exact model tokens must be measured with the tokenizer of the model actually consuming the view.
+For lowest agent token use: run `--search-only`, limit returned matches, materialize only selected sessions with `--chain-window 2`, read `.min.txt`, and open only cited `.txt` ranges. Avoid placing an entire `.txt` view into context when a focused range is sufficient. Exact model tokens must be measured with the tokenizer of the model actually consuming the view.
 
 ## Current status and roadmap
 
-VCC 2.3.1 is ready for personal workflows, local team use, and a public beta. It is not intended to be a centralized, multi-tenant conversation-history service. Within the currently validated scope, there are no known release-blocking P0/P1 issues.
+VCC 2.3.2 is ready for personal workflows, local team use, and a public beta. It is not intended to be a centralized, multi-tenant conversation-history service. Within the currently validated scope, there are no known release-blocking P0/P1 issues.
 
 Current release evidence includes:
 
-- deterministic parsing and search for Codex, Claude Code, and GitHub Copilot CLI logs;
-- 44 automated tests, four skill-package validators, and representative sanitized fixtures for all three clients;
+- deterministic parsing and search for Codex, Claude Code, GitHub Copilot CLI, and DeepSeek Harness logs;
+- 54 automated tests, four skill-package validators, and representative sanitized fixtures for all four clients;
 - verification against a real Codex session containing multiple compaction boundaries;
 - Linux, macOS, and Windows CI across the supported Python range, plus a reproducible benchmark tool;
 - bounded media decoding, cache-integrity checks, conservative regex guards, and source-aware recall selection.
 
-The source JSONL remains authoritative. Generated views and caches are derived artifacts: they may be deleted after use, or retained privately when repeated lookup justifies the storage and privacy cost. `--chain-window` reduces downstream IR, rendering, disk, and agent-context costs, but normalization still retains the current input's parsed records, so very large single-session logs can still require memory proportional to that file.
+The source JSONL remains authoritative. Generated views and caches are derived artifacts: they may be deleted after use, or retained privately when repeated lookup justifies the storage and privacy cost. The streaming normalizer reads one raw line at a time, buffers only the smallest client-safe unit, and retains only the selected chains. A local 100,000-record, 47.9 MB synthetic Codex benchmark with `--chain-window 2` reduced peak RSS from 244 MB to 19.8 MB and elapsed time from 0.459 s to 0.339 s; results vary by platform and workload.
 
 Prioritized follow-up work:
 
-1. Implement stateful, single-pass normalizers for each client to reduce peak memory on very large logs without changing deterministic output.
-2. Expand real-world schema fixtures, schema-drift checks, malformed-input tests, and fuzz coverage as client formats evolve.
-3. Add OS-independent regex execution isolation or hard timeouts; the current guard is deliberately conservative and `--allow-unsafe-regex` remains an explicit escape hatch.
-4. Track performance regressions over larger benchmark tiers, including peak RSS and long-running cache behavior.
-5. Add an optional cross-platform high-integrity source-hash mode for deployments whose filesystem does not provide reliable replacement identity; Windows hashing is already automatic.
-6. Consider an opt-in, privacy-preserving incremental content index only if measured workloads justify it. VCC will not duplicate raw conversation text into a permanent index by default.
+1. Expand real-world schema fixtures, schema-drift checks, malformed-input tests, and fuzz coverage as client formats evolve.
+2. Add OS-independent regex execution isolation or hard timeouts; the current guard is deliberately conservative and `--allow-unsafe-regex` remains an explicit escape hatch.
+3. Track performance regressions over larger benchmark tiers, including peak RSS and long-running cache behavior.
+4. Add an optional cross-platform high-integrity source-hash mode for deployments whose filesystem does not provide reliable replacement identity; Windows hashing is already automatic.
+5. Consider an opt-in, privacy-preserving incremental content index only if measured workloads justify it. VCC will not duplicate raw conversation text into a permanent index by default.
 
 Future client schemas are not assumed compatible until covered by fixtures and tests. VCC does not upload session data or require a cloud service.
 

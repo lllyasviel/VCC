@@ -5,7 +5,7 @@ description: "Compile and deterministically search supported agent-session JSONL
 
 # Conversation Compiler
 
-Use `scripts/VCC.py` in this skill directory as the canonical VCC runtime. It detects GitHub Copilot CLI, Codex, and Claude Code records automatically.
+Use `scripts/VCC.py` in this skill directory as the canonical VCC runtime. It detects GitHub Copilot CLI, Codex, Claude Code, and DeepSeek Harness records automatically. DeepSeek `.jsonl.zstd` input requires the optional Python `zstandard` package.
 
 ## Run the compiler
 

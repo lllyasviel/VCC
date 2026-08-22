@@ -134,19 +134,16 @@ def _section_hidden_exact(nodes):
 # ── lowering: brief ──
 
 def _tid_result_ranges(ir):
-    """Map short_tid → (start_line, end_line) for tool_result sections."""
-    # Find which sec corresponds to which short_tid
+    """Map full tool ID → (start_line, end_line) for tool-result sections."""
     tid_sec = {}
     for o in ir:
         if o["type"] == "meta_header":
             c = o["content"]
-            if c and len(c) >= 1:
+            tid = o.get("_tool_id")
+            if tid and c:
                 h = c[0]
-                # [tool] name:AABBCC or [tool_error] name:AABBCC
                 if h.startswith("[tool]") or h.startswith("[tool_error]"):
-                    parts = h.split(":")
-                    if len(parts) >= 2:
-                        tid_sec[parts[-1]] = o.get("_sec")
+                    tid_sec[tid] = o.get("_sec")
     # Collect line ranges per sec
     sec_range = {}
     for o in ir:
@@ -276,10 +273,7 @@ def build_brief_view(ir, truncate, filename="", truncate_user=256):
                         if je is not None:
                             e = je
                 if s is not None and e is not None:
-                    # Extract short_tid and look up tool_result range
-                    parts = c0.split()[1].split(":") if len(c0.split()) > 1 else []
-                    stid = parts[-1] if len(parts) >= 2 else ""
-                    rr = tid_ranges.get(stid)
+                    rr = tid_ranges.get(o.get("_tool_id"))
                     if rr:
                         summary = f"{summary} ({short}:{s+1}-{e+1},{rr[0]+1}-{rr[1]+1})"
                     else:

@@ -1,4 +1,4 @@
 interface:
-  display_name: "Recall"
-  short_description: "Recover prior context and verify current workspace state"
+  display_name: "VCC Recall"
+  short_description: "VCC: Recover prior context and verify current workspace state"
   default_prompt: "Use $recall to recover the previous session and continue from verified current state."

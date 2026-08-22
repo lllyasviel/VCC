@@ -5,7 +5,7 @@ description: "Compile and review one known agent session with VCC. Use for /read
 
 # Read Chat
 
-Review the requested session without relying on summaries alone.
+As a VCC companion skill, review the requested session without relying on summaries alone.
 
 1. Resolve the input path. If the user provides a session directory, select its conversation JSONL explicitly; for Copilot CLI this is normally `events.jsonl`. Do not guess among multiple plausible files.
 2. Resolve the companion compiler as `../conversation-compiler/scripts/VCC.py` relative to this skill directory. If it is absent, search the active client's installed skill roots for `conversation-compiler/scripts/VCC.py`; stop with a clear dependency error if it cannot be found.

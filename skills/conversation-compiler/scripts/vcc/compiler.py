@@ -4,26 +4,24 @@ import os
 
 from .cache import atomic_write_bytes, atomic_write_text
 from .common import DEFAULT_MAX_MEDIA_BYTES, VCCError, tokenize
-from .parser import collect_stats, load_records, merge_chunks, build_ir, split_chains
+from .parser import collect_stats, load_chains, build_ir
 from .renderer import assign_lines, render_lines, build_brief_view, build_search_view
 
 def compile_session(input_path, output_dir, truncate=128, truncate_user=256,
             grep_pattern=None, quiet=False, write_outputs=True,
             tolerate_partial_tail=True, diagnostics=None, protected_inputs=None,
-            max_media_bytes=DEFAULT_MAX_MEDIA_BYTES, chain_window=0):
+            max_media_bytes=DEFAULT_MAX_MEDIA_BYTES, chain_window=0,
+            retain_ir=True):
     if not output_dir:
         raise VCCError("compile_session requires an explicit managed or export output directory")
     os.makedirs(output_dir, exist_ok=True)
     base = os.path.splitext(os.path.basename(input_path))[0]
 
-    recs = merge_chunks(load_records(input_path, tolerate_partial_tail, diagnostics))
-    chains = split_chains(recs)
-    if not chains:
+    indexed_chains, total_chains = load_chains(
+        input_path, chain_window, tolerate_partial_tail, diagnostics
+    )
+    if not indexed_chains:
         raise VCCError(f"{input_path}: no supported conversation records found")
-    total_chains = len(chains)
-    indexed_chains = list(enumerate(chains, 1))
-    if chain_window:
-        indexed_chains = indexed_chains[-chain_window:]
 
     results, paths = [], []
 
@@ -54,8 +52,10 @@ def compile_session(input_path, output_dir, truncate=128, truncate_user=256,
             stats_footer = collect_stats(chain)
             if stats_footer:
                 full.extend([""] + stats_footer)
-            atomic_write_text(fp, "\n".join(full))
-            atomic_write_text(mp, "\n".join(brief))
+            full_text = "\n".join(full)
+            brief_text = "\n".join(brief)
+            atomic_write_text(fp, full_text)
+            atomic_write_text(mp, brief_text)
 
         if grep_pattern and write_outputs:
             build_search_view(ir, ffn, grep_pattern)
@@ -63,12 +63,12 @@ def compile_session(input_path, output_dir, truncate=128, truncate_user=256,
             atomic_write_text(vp, "\n".join(view))
 
         result_ref = fp if write_outputs else os.path.abspath(input_path) + "::rendered"
-        results.append((result_ref, ir, os.path.abspath(input_path)))
+        results.append((result_ref, ir if retain_ir else None,
+                        os.path.abspath(input_path)))
         if write_outputs:
-            ft, bt = "\n".join(full), "\n".join(brief)
             _cnt = lambda s: sum(1 for t in tokenize(s) if t.strip())
             paths.append((fp, mp, vp if grep_pattern else None,
-                          len(full), _cnt(ft), len(brief), _cnt(bt)))
+                          len(full), _cnt(full_text), len(brief), _cnt(brief_text)))
 
     if not quiet:
         for fp, _, _, fl, fw, _, _ in paths:
