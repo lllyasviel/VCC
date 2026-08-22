@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# Claude Code/Desktop creates disposable Git worktrees for isolated sessions.
+.claude/worktrees/

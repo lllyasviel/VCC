@@ -1,0 +1,4 @@
+{"type":"user","timestamp":"2026-01-01T00:00:00Z","message":{"content":"claude-before"}}
+{"type":"system","timestamp":"2026-01-01T00:00:01Z","subtype":"compact_boundary"}
+{"type":"attachment","timestamp":"2026-01-01T00:00:02Z","attachment":{"type":"skill_listing"}}
+{"type":"assistant","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"text","text":"claude-after"}]}}

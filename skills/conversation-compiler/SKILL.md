@@ -1,137 +1,73 @@
 ---
 name: conversation-compiler
-description: "VCC (View-oriented Conversation Compiler) documentation. Compile Claude Code JSONL logs into adaptive views."
+description: "Compile and deterministically search supported agent-session JSONL with VCC. Use for full, brief, focused, or structured transcript views, parser diagnostics, and history discovery."
 ---
 
-# VCC — View-oriented Conversation Compiler
+# Conversation Compiler
 
-Compile Claude Code JSONL logs into adaptive views for reading, searching, and context recovery.
+Use `scripts/VCC.py` in this skill directory as the canonical VCC runtime. It detects GitHub Copilot CLI, Codex, Claude Code, and DeepSeek Harness records automatically. DeepSeek `.jsonl.zstd` input requires the optional Python `zstandard` package.
 
-## Usage
-
-```bash
-python "path/to/VCC.py" <input.jsonl ...> [options]
-```
-
-| Option | Description |
-|--------|-------------|
-| `-o <dir>` | Output directory (default: same as input) |
-| `-t <N>` | Token truncation limit (default 128) |
-| `-tu <N>` | User message token limit (default 256) |
-| `--grep <pattern>` | Regex search pattern (Python `re` — use `a|b`, NOT `a\|b`) |
-
-This tool also supports multi-file processing:
+## Run the compiler
 
 ```bash
-cd "/path/to/target/folder" && python "path/to/VCC.py" *.jsonl --grep "keyword"
+python "<this-skill-dir>/scripts/VCC.py" "<session.jsonl>"
 ```
 
-## Output Files
-
-| File | When | Description |
-|------|------|-------------|
-| `.txt` | Always | Full transcript, lossless |
-| `.min.txt` | Always | Brief overview |
-| `.view.txt` | `--grep` only | Search-focused view |
-| stdout | `--grep` only | Search results with block-level line range references |
-
-## Rules
-
-- **Forward slashes only in bash commands.** Backslashes in double quotes are escape characters — `\U`, `\l`, `\.` get silently mangled. Use `"C:/Users/..."` not `"C:\Users\..."`. This applies to ALL bash commands (not just this skill), on ALL platforms (Windows and Linux alike).
-- Do NOT use `-o` unless the user explicitly requests an output directory. By default, compiled files are written next to the input JSONL — this is the intended behavior.
-- Do NOT clean up compiled output files after use. Leave them in place unless the user explicitly asks to clean up.
-
-## Workflow
-
-**1. Compile**
+Pass multiple inputs or a quoted glob when needed:
 
 ```bash
-python "path/to/VCC.py" "path/to/conversation.jsonl"
+python "<this-skill-dir>/scripts/VCC.py" "<sessions>/**/*.jsonl"
 ```
 
-Produces `.txt` + `.min.txt` next to the input file. Long conversations are automatically split into numbered chunks. The console output lists every produced file with line/word counts — read it to understand the conversation's size and structure before proceeding:
+Choose the smallest mode that answers the task:
 
-```
-conversation_1.txt  (2808 lines, 34545 words)
-conversation_2.txt  (9622 lines, 116015 words)
-conversation_3.txt  (3242 lines, 37946 words)
-conversation_1.min.txt  (101 lines, 1572 words)
-conversation_2.min.txt  (811 lines, 9504 words)
-conversation_3.min.txt  (205 lines, 3340 words)
-```
+- Broad discovery: combine `--literal` or repeated `--term` with `--search-only`; use `--format json|ndjson` for automation. Returned `::rendered` ranges are virtual until the session is materialized.
+- Materialized inspection: omit `--search-only`; output goes to the private managed cache unless `-o <dir>` explicitly exports it.
+- Regex: use `--grep` only when regex semantics are required. Prefer literal queries and pass `--allow-unsafe-regex` only for a trusted pattern that the conservative guard rejects.
+- Recall: pass `--chain-window 2 --diagnostics` to emit only the newest two compaction chains and obtain schema coverage plus `recall_selection`.
+- Strict processing: pass `--strict` when an incomplete live tail or any failed input must abort the operation.
+- `--cache-dir <dir>`: override the private managed cache root. Without `-o`, materialized compilation uses `${VCC_CACHE_DIR}`, `${XDG_CACHE_HOME}/vcc`, the Windows local app-data cache, or `~/.cache/vcc` in that order.
 
-Chunks are numbered chronologically — higher numbers are more recent. (During `/recall`, the last chunk is the current conversation; the second-to-last is likely where the previous session's context ends.) Use this to gauge how many chunks exist and how large each is, so you can target your `.min.txt` reads and `--grep` searches to the right chunks.
+Run `python "<VCC.py>" --help` for truncation, media, cache-refresh, scoring-limit, and output-format controls instead of assuming their values.
 
-**2. Read `.min.txt`**
-
-The `.min.txt` is a scannable outline: user/assistant text is kept (truncated), tool calls collapse to one-line summaries with line references back to `.txt`.
-
-```
-[user]
-
-Take a look!
-
-[assistant]
-
-Let me take a look.
-
-* Read "code.py" (a_1.txt:19-21,24-34)
-```
-
-Each `*` line shows the tool name, key parameter, and two `.txt` line ranges: the call (19-21) and the result (24-34). Read these ranges in `.txt` for full details.
-
-**3. Search with `--grep`**
-
-Always use `--grep`, never system grep nor your embedded Grep tool. This script's `--grep` returns important block-level line RANGES that no other grep tools can provide. The output paths are relative to CWD, so `cd` close to the target first to keep outputs short and save tokens.
+Run deterministic history discovery through the same entry point:
 
 ```bash
-cd "/path/to/target/folder" && python "path/to/VCC.py" "path/to/conversation.jsonl" --grep "keyword"
+python "<VCC.py>" history-search "<query>" --current-client codex --format json
 ```
 
-Stdout example (`#` prefix = shortened filename)：
+Use each result's `event_timestamp` as the matching message or tool-event time. Do not infer event time from a dated session path, and do not call `event_timestamp` an experiment start time without confirming the adjacent execution record.
 
-```
-(#752a87.txt:L67-L81) [assistant]      →  .txt lines 67-81
-  77: one matched line ...             →  .txt line 77
-```
+Pass the actual runtime client explicitly when known. Use `--current-session <jsonl>` for current-session compaction recovery. Do not infer the current client merely from an existing history directory.
 
-Optionally read `.view.txt` for focused search view.
+## Inspect outputs
 
-**4. Jump to `.txt`**
+Choose output lifetime deliberately:
 
-All line references point to `.txt`. Read the referenced range for full context. Remember to read a bit more lines before and after the referenced range to get more context.
+- Explicit compilation: use the private managed cache by default; never modify the source history directory.
+- Repeated `readchat` or `recall`: reuse the managed cache so selected-session evidence remains available for follow-up.
+- Broad discovery: use `--search-only`; materialize only selected sessions afterward.
+- User export: use `-o` and treat the result as persistent.
 
-# SKILLs
+When views are materialized, the compiler writes:
 
-## /readchat — Read a specific conversation log
+- `.txt`: high-fidelity semantic rendering of supported events and authoritative line-reference target. It is not a byte-for-byte or event-complete copy of the JSONL.
+- `.min.txt`: brief view with tool calls collapsed to references into `.txt`.
+- `.view.txt`: matching blocks produced only by a materialized regex search.
 
-**Trigger**: The user wants to read a specific JSONL conversation log.
+Read the compiler's file/line counts first. Then read `.min.txt`; open the cited `.txt` ranges when details matter. For a targeted question, use a literal or multi-term query and inspect the returned block ranges before reading broader transcript sections.
 
-**Action**: Follow the Workflow above with the user-specified filenames or requests.
+## Preserve evidence
 
-## /searchchat — Search across conversation logs
+- Treat generated views as reproducible derivatives, not the authoritative record. The source JSONL remains authoritative.
+- Keep explicit exports and selected-session views. Do not persist views for every candidate in a broad search.
+- Keep cache roots private and out of source control or cloud sync. They can contain source code, commands, and secrets copied from session logs.
+- Regenerate cached views after the source log changes or VCC is upgraded. Cache entries may be deleted when no longer needed because they are reproducible.
+- Distinguish transcript evidence from the current workspace state; session logs can be stale.
+- Report malformed JSON, missing files, unsupported records, and output collisions explicitly. Do not silently substitute another session.
+- Treat a nonzero multi-file search exit as a partial failure: usable matches may still be present on stdout, while stderr names skipped inputs. Rerun with `--strict` when all-or-nothing behavior is required.
+- Do not claim a live or partially written session is complete merely because its current JSONL compiles.
 
-**Trigger**: The user wants to search across conversation logs in `~/.claude/projects/`.
+## Companion skills
 
-**Action**:
-
-1. `ls ~/.claude/projects/` — browse project directories, narrow the search area.
-2. `cd ~/.claude/projects/<project> && python "absolute/path/to/VCC.py" *.jsonl --grep "keyword"` — search top-level conversations first.
-3. If no results: `cd ~/.claude/projects/<project> && python "absolute/path/to/VCC.py" **/*.jsonl --grep "keyword"` — expand to subagents.
-
-**Critical**: Always `cd` into the target directory first, then use VCC globs — a single `cd && python VCC.py <glob> --grep` is the correct pattern. Without `cd`, grep output contains full absolute paths instead of short relative paths, wasting tokens. All content search on JSONL must use VCC's `--grep`, never system grep or the embedded Grep tool — VCC's `--grep` returns block-level line ranges with role tags that no other grep can provide.
-
-## /recall — Recover context from a previous conversation
-
-**Trigger**: The conversation opens with a context-continuation summary ("This session is being continued from a previous conversation..."), or the user says `/recall`.
-
-**Action**:
-
-1. **Find JSONL filename** — The continuation message ends with `read the full transcript at: <path>.jsonl`. Find that JSONL filename. If no JSONL path is present (e.g. the user invoked `/recall` manually without a continuation header), use the `/searchchat` method to locate the JSONL before proceeding to steps 2–3.
-
-2. **Follow VCC Workflow** — Follow the full Workflow above (compile → read `.min.txt` → `--grep` → jump to `.txt`) with the JSONL file found in step 1. The summary is lossy — only the original JSONL is authoritative.
-
-3. **Verify against current state** — After recovering the conversation, cross-check with reality:
-   - **REALLY read files** — Read all files referenced in the conversation with your Read tool. Pre-loaded content from system-reminders or prior conversation turns does NOT count — it may be truncated, stale, or lossy. You must issue a fresh Read call for each file, even if you believe you already have its content. 99.97% of the time, the user has externally modified nearly every file between sessions. If you skip reading and miss their external changes, your failure rate is effectively 100%.
-   - **Key details** — Identify specific values, paths, configs, and logic mentioned in the conversation. Compare against the actual files to catch drift or errors.
-   - **Understand the journey** — Trace the user's intent, decision sequence, and direction changes. Understand not just what was done, but how and why they got there.
+Use `readchat` to review a specified session, `searchchat` to locate history across supported clients, and `recall` to recover prior context. Those skills contain their own workflows and depend only on this skill's canonical runtime.

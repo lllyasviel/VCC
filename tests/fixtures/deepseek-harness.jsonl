@@ -1,0 +1,13 @@
+{"type":"session","id":"deepseek-fixture","createdAt":1700000000000,"cwd":"/tmp/vcc","delegationDepth":0}
+{"type":"request/header","time":1700000000001,"data":{"header":{"config":{"model":"deepseek-chat"},"system":"test system"},"reason":"initial"}}
+{"type":"session/title","time":1700000000001,"data":{"title":"DeepSeek fixture session"}}
+{"type":"goal/change","time":1700000000001,"data":{"goal":{"objective":"verify harness normalization","phase":"active"},"roundsStarted":1}}
+{"type":"user/message","time":1700000000002,"data":{"role":"user","content":[{"type":"text","text":"deepseek user marker"}],"source":{"kind":"user"},"id":"user-1"},"surfaceOp":"append"}
+{"type":"assistant/message","time":1700000000003,"data":{"turn":1,"step":1,"message":{"role":"assistant","content":[{"type":"reasoning","text":"reasoning marker"},{"type":"text","text":"deepseek answer marker"}],"source":{"kind":"model","provider":"deepseek","model":"deepseek-chat"},"id":"assistant-1"},"usage":{"inputTokens":3,"outputTokens":4}},"surfaceOp":"append"}
+{"type":"tool/call","time":1700000000004,"data":{"turn":1,"step":1,"callId":"call-1","name":"bash","arguments":"{\"command\":\"printf tool marker\"}"}}
+{"type":"tool/result","time":1700000000005,"data":{"turn":1,"step":1,"message":{"role":"user","content":[{"type":"tool-result","toolCallId":"call-1","content":[{"type":"text","text":"tool result marker"}],"isError":false}],"source":{"kind":"tool","callId":"call-1"},"id":"result-1"}}}
+{"type":"compaction/start","time":1700000000006,"data":{}}
+{"type":"compaction/summary","time":1700000000007,"data":{"rawOutput":"compaction marker"}}
+{"type":"compaction/end","time":1700000000008,"data":{}}
+{"type":"hook/invoked","time":1700000000009,"data":{"handlerId":"hook-1"}}
+{"type":"plugin/custom-event","time":1700000000010,"data":{"note":"intentionally unknown"}}

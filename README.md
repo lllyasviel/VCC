@@ -1,288 +1,281 @@
-（this readme is written by human）
-
 # VCC: View-oriented Conversation Compiler
 
 [English](README.md) | [简体中文](README_cn.md) | [日本語](README_jp.md)
 
-Official implementation of "View-oriented Conversation Compiler for Agent Trace Analysis" ([Paper](https://arxiv.org/abs/2603.29678))
+VCC compiles local agent-session JSONL into readable, searchable transcript views with stable block roles and line-range references. It supports GitHub Copilot CLI, Codex, Claude Code, and DeepSeek Harness and detects their record formats automatically.
 
-This repo is for daily use. To reproduce academic experiments in the paper, see [VCC-experiments](https://github.com/lllyasviel/VCC-experiments).
+VCC is the implementation accompanying “View-oriented Conversation Compiler for Agent Trace Analysis” ([paper](https://arxiv.org/abs/2603.29678)). Academic reproduction materials live in [VCC-experiments](https://github.com/lllyasviel/VCC-experiments).
 
-VCC is a compiler that compiles your conversation logs (Claude Code's JSONL) into efficient and agent-friendly views. Then you will never fear Claude Code's `/compact` - CC now can finally see the original details of compacted context. It also supports searching across all your Claude Code conversations.
+## Supported clients
 
-Things that tend to happen after you install VCC:
+| Client | Typical local input | Normalized content |
+|---|---|---|
+| GitHub Copilot CLI | `${COPILOT_HOME:-$HOME/.copilot}/session-state/*/events.jsonl` | messages, reasoning, tools, results, compaction |
+| Codex | `${CODEX_HOME:-$HOME/.codex}/sessions/YYYY/MM/DD/rollout-*.jsonl` | messages and function/custom tool events |
+| Claude Code | `$HOME/.claude/projects/**/*.jsonl` | messages, thinking, tools, results, compaction |
+| DeepSeek Harness | `${DSH_HOME:-$HOME/.dsh}/sessions/**/session.jsonl[.zstd]` | messages, reasoning, tools, results, compaction |
 
-- You find out that if you installed this earlier, you can save lots of money that you would need to waste for struggling with CC's `/compact`.
-- `/compact` + `/recall` becomes your favorite combo.
-- You start wondering why this wasn't built in CC.
-- You delete your multi-layer RAG memory system, your self-evolving agent skill memory, and 15 other AGI inventions - if you really have those...
+The source JSONL remains authoritative. Generated views are reproducible derivatives and can become stale when a live session is appended.
 
-There is also a [paper](https://arxiv.org/abs/2603.29678) showing that VCC improves context learning and agent trace analysis and harness on some academic benchmark.
+### Default source priority
 
-# Install
+`searchchat` and `recall` do not search all clients unconditionally:
 
-Currently We support Claude Code only. Codex and OpenClaw are coming soon.
+1. An explicitly requested client or client set always wins.
+2. An explicit global/cross-platform request searches every existing source.
+3. Otherwise VCC searches the current agent client's history first.
+4. Other clients are searched only when the first tier has no reliable match, is ambiguous, or is unavailable.
+5. If the current client cannot be identified from runtime context, VCC falls back to all existing sources and reports that fallback.
 
-To install, copy this to your Claude Code:
+Directory presence alone does not identify the current agent. Search results state which tier and roots were used.
 
-    Please help me install the skills from 
-    https://github.com/lllyasviel/VCC.git 
-    just clone it then follow the INSTALL.md
+## Skills
 
-To update, copy this to your Claude Code:
+VCC ships as four companion skills that must be installed together:
 
-    Please help me update the skills from
-    https://github.com/lllyasviel/VCC.git
-    just clone it then follow the INSTALL.md
+| Skill | Purpose |
+|---|---|
+| `conversation-compiler` | Compile known JSONL files and inspect artifacts directly |
+| `readchat` | Review one known session with exact transcript evidence |
+| `searchchat` | Discover sessions across local history without materializing every candidate |
+| `recall` | Recover prior decisions and reconcile them with current workspace state |
 
-To uninstall, copy this to your Claude Code:
+See [INSTALL.md](INSTALL.md) for client-specific installation and verification. See [SKILLS.md](SKILLS.md) for skill descriptions, packaging, portability, and release rules.
 
-    Please help me uninstall VCC skills by deleting
-    `conversation-compiler`, `readchat`, `recall`, `searchchat`
-    from my `.claude/skills`
+## Quick start
 
-Restart Claude Code after install, update, or uninstall.
+Compile one session into VCC's private managed cache:
 
-# Basic Usage
-
-When a compact is triggered (whether automaticaly or manually), you can immediately `/recall`.
-
-For example, after an automatic compact or manual `/compact`, you will see somthing like `(... compacted)`. You can then:
-
-`/recall`
-
-and CC will recall everything automatically, or you can
-
-`/recall let's review our conversation`
-
-`/recall in those six rounds of analysis we just did, which access attempt causes the second layer of the server's three-layer log to crash?`
-
-`/recall go through all six details I mentioned about the user survey again`
-
-`/recall review my thought process so far`
-
-For new conversations, you can use `/searchchat` or `/recall` (which will fallback to search). For example:
-
-`/searchchat how did we handle the captcha in that browser listener system we discussed last time?`
-
-`/recall did we decide to use React for that canvas solution we discussed last time?`
-
-These commands can find and recover the orginal chats accross months of conversation history.
-
-`/readchat` is for advanced usage, see below.
-
-# How It Works
-
-A Claude Code JSONL like this (you can find lots of these things in your `~/.claude/projects`):
-
-```
-{"type":"user","message":{"id":"msg_user1","content":"I have two pets.\nCan you write a P..."}}
-{"type":"assistant","message":{"id":"msg_asst1","content":[{"type":"thinking","thinking":"The
-user wants a pet tracking module.\nThey have a dog (Buddy) and a cat (Whiskers).\nLet me chec
-k if there's an existing file first...
+```bash
+python "skills/conversation-compiler/scripts/VCC.py" "path/to/session.jsonl"
 ```
 
-gets compiled into these views:
+Search many sessions without writing transcript files:
 
-## UI View
-
-This simulates what the user see in CC
-
-```
-[user]
-
-I have two pets.
-Can you write a Python module for tracking them?
-One is a dog named Buddy and a cat named Whiskers.
-
-[assistant]
-
-Sure! Let me check if there's an existing file.
-
-* Read "src/pets.py" (example.txt:18-20,23-25)
-
-No existing file.
-I'll create a module with Dog and Cat classes.
-
-* Write "src/pets.py" (example.txt:40-63,66-68)
-
-Created src/pets.py.
+```bash
+python "skills/conversation-compiler/scripts/VCC.py" "path/to/**/*.jsonl" \
+  --grep "literal-or-regex" --search-only
 ```
 
-The pointers like `(example.txt:18-20,23-25)` can jump to the exact lines for full detail as below.
+Prefer explicit query semantics and structured output in automation:
 
-## Full View
-
-The complete transcipt. Line numbers are assigned once and shared accross all views.
-
-Lets say this is `example.txt`:
-
-```
-  1  [user]
-  2
-  3  I have two pets.
-  4  Can you write a Python module for tracking them?
-  5  One is a dog named Buddy and a cat named Whiskers.
-  6
-  7  ══════════════════════════════
-  8  [assistant]
-  9
- 10  >>>thinking
- 11  The user wants a pet tracking module.
- 12  They have a dog (Buddy) and a cat (Whiskers).
- 13  Let me check if there's an existing file first.
- 14  <<<thinking
- 15
- 16  Sure! Let me check if there's an existing file.
- 17
- 18  >>>tool_call Read:tu01
- 19  file_path: src/pets.py
- 20  <<<tool_call
- 21
- 22  ══════════════════════════════
- 23  [tool_error] Read:tu01
- 24
- 25  Error: file not found src/pets.py
- 26
- 27  ══════════════════════════════
- 28  [assistant]
- 29
- 30  >>>thinking
- 31  No existing file.
- 32  I'll create Dog and Cat subclasses.
- 33  The dog needs walk tracking.
- 34  The cat needs nap tracking.
- 35  <<<thinking
- 36
- 37  No existing file.
- 38  I'll create a module with Dog and Cat classes.
- 39
- 40  >>>tool_call Write:tu02
- 41  file_path: src/pets.py
- 42  content: |
- 43    class Pet:
- 44        def __init__(self, name, species):
- 45            self.name = name
- 46            self.species = species
- 47
- 48    class Dog(Pet):
- 49        def __init__(self, name):
- 50            super().__init__(name, 'dog')
- 51            self.walks = []
- 52
- 53        def log_walk(self, duration, distance):
- 54            self.walks.append({'min': duration, 'km': distance})
- 55
- 56    class Cat(Pet):
- 57        def __init__(self, name):
- 58            super().__init__(name, 'cat')
- 59            self.naps = []
- 60
- 61        def log_nap(self, duration, spot):
- 62            self.naps.append({'min': duration, 'spot': spot})
- 63  <<<tool_call
- 64
- 65  ══════════════════════════════
- 66  [tool] Write:tu02
- 67
- 68  File written successfully.
- 69
- 70  ══════════════════════════════
- 71  [assistant]
- 72
- 73  Created src/pets.py.
+```bash
+python "skills/conversation-compiler/scripts/VCC.py" "path/to/**/*.jsonl" \
+  --term VCC --term cache --match all --ignore-case --format ndjson --search-only
 ```
 
-## Adaptive View `--grep dog`
+Search local histories with deterministic current-client priority:
 
-The view can be adapted to search queries like `--grep dog`. Only blocks contaning a match are shown, but the conversation struture is preserved. Each block has a pointer back to the full view.
-
-```
-[user]
-
-(example.txt:3-5)
-  5: One is a dog named Buddy and a cat named Whiskers.
-
-══════════════════════════════
-[assistant]
-
->>>thinking
-(example.txt:11-13)
-  12: They have a dog (Buddy) and a cat (Whiskers).
-<<<thinking
-
-══════════════════════════════
-[assistant]
-
->>>thinking
-(example.txt:31-34)
-  33: The dog needs walk tracking.
-<<<thinking
-
->>>tool_call Write:tu02
-(example.txt:41-62)
-  50:           super().__init__(name, 'dog')
-<<<tool_call
+```bash
+python "skills/conversation-compiler/scripts/VCC.py" history-search "VCC cache" \
+  --current-client codex --format json
 ```
 
-`Write:tu02` spans 22 lines of code (41–62), but only line 50 (`'dog'`) matched: the Cat class (56–62) is absent. The pointer `41-62` tells the agent where to read the full block.
+Materialize only a selected session in a private managed cache:
 
-## Transposed View `--grep dog`
-
-Same matches, but as a flat list. Each entry is taged with what it is (user message, thinking, tool call, etc.) and where to find it in the full view:
-
-```
-(example.txt:3-5) [user]
-  5: One is a dog named Buddy and a cat named Whiskers.
-
-(example.txt:11-13) [thinking]
-  12: They have a dog (Buddy) and a cat (Whiskers).
-
-(example.txt:31-34) [thinking]
-  33: The dog needs walk tracking.
-
-(example.txt:41-62) [tool_call]
-  50:           super().__init__(name, 'dog')
+```bash
+python "skills/conversation-compiler/scripts/VCC.py" "path/to/selected.jsonl" \
+  --grep "literal-or-regex"
 ```
 
-The adaptive view keeps conversation order so it is good for understanding context around a match. The transposed view is a flat list so it is good for scanning all matches at once. All pointers points into the full view.
+Without `-o`, VCC uses `${VCC_CACHE_DIR}`, `${XDG_CACHE_HOME}/vcc`, the Windows local app-data cache, or `~/.cache/vcc` in that order. Use `--cache-dir` only to override that private location. Use `-o <dir>` only for an explicit export. VCC rejects equal input stems in one shared export directory.
 
-# Q&A
+## Output views
 
-### "Just another agent memory system?"
+| Artifact | Created when | Purpose |
+|---|---|---|
+| `.txt` | materialized compile | High-fidelity semantic view and line-reference target |
+| `.min.txt` | materialized compile | Brief chronological view with collapsed tool references |
+| `.view.txt` | materialized compile with `--grep` | Matching blocks in conversation structure |
+| stdout matches | `--grep` | Reverse-chronological, role-tagged match list |
+| `metadata.json` | managed cache | Source path, size, timestamps, generation parameters, and artifact hashes |
 
-Nope. Memory systems store precomputed stuff like summaries, embeddings, graphs. Those structures and levels are usually static. And most of them are calling LLMs to do summarization etc...
+`--search-only` writes none of these artifacts. Its `::rendered` ranges are virtual discovery references; rerun the selected source without `--search-only` before citing or opening exact transcript ranges.
 
-VCC stores nothing. Views are dynamic. They are computed on the fly from the original JSONL, then thrown away after use. (We call this "projection".)
+## Output lifetime policy
 
-### "Okay isn't this just grep?"
+VCC does not maintain a memory database or upload session content. It does create local derived files when a view is materialized.
 
-No not at all. Grep gives you matching lines, but you cant tell if a match is the user talking, the agent thinking, a tool call, or a tool result. VCC has **block range pointers** and **block roles**. 
+- Explicit compile: use the private managed cache and never modify the source history directory.
+- `readchat` / `recall`: reuse selected-session cache entries for follow-up.
+- Broad `searchchat`: use `--search-only`; do not persist unmatched candidates.
+- Explicit export: use `-o`; treat outputs as user-owned persistent artifacts.
 
-Some people may keep asking *"Okay, then what about splitting chat log into message files and using filesystem grep? What about structured grep? What about my XXXX database system?"* 
+Cache entries are reproducible. Regenerate them after the source JSONL changes or VCC is upgraded, and delete old entries when they are no longer referenced.
+Valid full/brief cache entries are reused by default. Canonical source path, size, timestamps, file identity, truncation parameters, and the VCC version are part of the validity key; Windows additionally verifies source SHA-256 because replacement can preserve file identity there. Use `--cache-policy refresh` to force regeneration.
 
-Lets say you jump from a adaptive view to the full view with some block line number, the surrounding context is right there. To get that from a file-per-message split, you need a tree to track hierarchy as a tree-like thing and then use a linked list to track temporal order, and you maintain both, and you even need to determine how many "temporal surrounding" things are really the correct surrounding context. By the time you finally finally make it work you basically reimplemented VCC..
+## Structured search and ranking
 
-### "Well but isn't this just pretty-print?"
+Use `--literal` for one exact literal string, repeated `--term` with `--match all|any` for multi-anchor queries, and `--grep` only for regex. `--format json|ndjson` emits schema-versioned block records containing source, role, full-view range, matched patterns, matching lines, and a deterministic relevance score. User and assistant matches outrank unexplained tool output; ranking chooses candidates but is not evidence of a conclusion.
 
-They are very different. Pretty-print just reformats text. VCC is a real compiler with lex, parse, IR, lower, emit. Some examples of what it does:
+`history-search` enumerates Copilot, Codex, Claude, and DeepSeek Harness roots, searches the explicitly supplied current client first, and expands only on no/weak matches unless scope or expansion is overridden. If the current client is unknown, it searches all sources and reports that fallback. `--current-session` adds an exact first tier for compaction recovery.
 
-* The lexer drops junk records like `queue-operation`, `progress`, `api_error` before parsing even starts
-* The parser turns tool call parameters from escaped JSON blobs into readable block-indented text
-* The parser also strips `digits→` prefixes from Read tool results to recover original source, and decodes base64 images to files
-* At the IR stage, split assistant messages (same ID but multiple JSONL records because of compaction) get reassembled into single sections
-* Lowering strips harness XML (`<system-reminder>`, `<ide_opened_file>`, etc), filters internal tools (`TodoWrite`, `ToolSearch`), cleans ANSI escape codes, and hides pure-markup user turns
-* The emitter produces three views sharing one line-number coordinate system
+Each structured match includes `event_timestamp`, taken from the matched source event when available. Text output labels it as `event=...`. Treat this as the time of the matching message or tool event, not automatically as the time an experiment started or an artifact was produced; inspect adjacent tool calls when that distinction matters. History ranking orders matches by score, then source tier, source modification time, and newest matching block. `source_mtime_ns` reports the file tie-breaker and is not an event timestamp. Dates embedded in session paths identify where a client archived or first created the session and may differ from the matching event time when a session is reused.
 
-the IR stage assign line numbers once to ensure that everything si consistent. After that, lowering can only select, truncate, or annotate. The line numbers cannot reorder or renumber. So cross-view pointers are always consistent.
+Diagnostics schema v2 separates source accounting from normalized output. `source_records_supported + source_records_ignored + source_records_unknown` always equals `source_records_total`; `normalized_records_emitted` may differ because one source event can emit multiple normalized records. `recall_selection` identifies the pre-compaction and latest brief views so an agent can skip older chains by default.
 
-# Cite
+For recall, pass `--chain-window 2` to materialize only the two selected chains. VCC rejects regexes longer than 4096 characters and common nested-unbounded-repeat/backreference patterns by default; use literal or term queries whenever possible. `--allow-unsafe-regex` is an explicit trusted-input escape hatch, not a timeout guarantee.
 
-I haven't submitted VCC to any conferences or journals; just want it to be publicly available:
+## Why VCC is more than text grep
 
-    @article{zhang2026vcc,
-      title={View-oriented Conversation Compiler for Agent Trace Analysis},
-      author={Lvmin Zhang and Maneesh Agrawala},
-      year={2026},
-      url={https://github.com/lllyasviel/VCC}
-    }
+VCC lexes supported formats, normalizes them into one conversation model, parses role-aware blocks, assigns a stable full-view line coordinate system, and lowers that representation into full, brief, and focused views. Search results therefore identify whether a match came from a user message, assistant output, reasoning, tool input, or tool result and provide the full block range needed for context.
+
+## Implementation and algorithm
+
+For each input file, VCC runs this deterministic pipeline:
+
+1. **Lex** JSONL records incrementally and detect Copilot, Codex, Claude, or DeepSeek Harness format.
+2. **Normalize** client-specific messages and tool events into one record model.
+3. **Merge and split** streamed assistant chunks and compaction chains.
+4. **Parse** messages, reasoning, tools, results, and media references into an intermediate representation (IR).
+5. **Assign lines once** on the full IR so every derived view shares one coordinate system.
+6. **Lower** the IR into brief and regex-focused selections without renumbering full-view lines.
+7. **Emit** materialized files or stream search-only matches.
+
+The executable is intentionally thin. The implementation lives in `scripts/vcc/` with one-way dependencies:
+
+| Module | Responsibility |
+|---|---|
+| `common.py` | Shared version, limits, errors, and text utilities |
+| `normalizers.py` | Codex, GitHub Copilot, and DeepSeek Harness schema adapters |
+| `parser.py` | Client detection, JSONL validation, chain construction, media handling, diagnostics, and IR construction |
+| `renderer.py` | Stable line assignment and full, brief, and focused view lowering |
+| `query.py` | Block matching, deterministic scoring, per-source limiting, and text/JSON/NDJSON output |
+| `cache.py` | Atomic writes, cache keys, manifests, integrity validation, cleanup, and permissions |
+| `compiler.py` | One-session application pipeline connecting parser, renderer, and storage |
+| `cli.py` | Argument validation, glob expansion, multi-input isolation, cache policy, and exit status |
+
+`scripts/VCC.py` only configures the executable and dispatches to `vcc.cli`; `history_search.py` remains a separate history-discovery service that invokes the same public CLI protocol. Internal modules do not depend on the entry point, and parser/renderer/query do not depend on CLI policy.
+
+Images and documents embedded as base64 are decoded only for materialized views; `--search-only` keeps placeholders and does not decode media. Tool calls and results are linked by tool ID. The full view is authoritative for VCC line references, but the source JSONL remains authoritative for unsupported or intentionally omitted events.
+
+## Time and space complexity
+
+Let, for one file:
+
+- `C` be decoded textual/JSON content size;
+- `R` be JSONL record count;
+- `B` be IR node/section count;
+- `L` be rendered output size;
+- `M` be total decoded media bytes and `Mmax` the largest single decoded payload;
+- `W` be normalized content retained by `--chain-window` (all chains when it is `0`);
+- `T` be the largest client-safe normalization segment, normally one record or turn;
+- `F` be the number of input files.
+
+| Stage | Time | Peak memory / disk notes |
+|---|---|---|
+| Input expansion and mtime sort | `O(F log F)` | `O(F)` paths |
+| Streaming lex + normalize + chain selection | `O(C + R)` | `O(W + T)` with `--chain-window`; `O(C + R)` when retaining all chains |
+| Parse + IR construction | `O(W + B + M)` | `O(W + B + Mmax)` transient memory; up to `O(M)` media output |
+| Line assignment + emit | `O(B + L)` | up to `O(L)` rendered buffers |
+| Brief/focused lowering | `O(C + B)` | section and visibility indexes are built once per IR |
+| Regex matching | pattern-dependent | simple/literal patterns are usually near `O(C)`; pathological Python `re` patterns can backtrack superlinearly |
+
+Therefore one materialized file is linear in its content and output aside from pattern-dependent regex behavior. With a bounded chain window, peak working memory is `O(W + T + B + L + Mmax)` rather than proportional to every source record; with `--chain-window 0`, retaining all chains still requires `O(C + R + B + L + Mmax)`. VCC releases each file's result before processing the next, so peak working memory is based on the largest file rather than the sum of all files.
+
+Persistent disk usage for one materialized file is `O(Lfull + Lbrief + Lview + M)`; across files it is the sum of those terms plus `O(F)` small cache metadata. `--search-only` uses `O(1)` persistent output space and does not decode embedded media.
+
+A valid-cache check is `O(1)` in source size on POSIX filesystems. On Windows it is `O(C)` time with `O(1)` extra memory because VCC streams the source through SHA-256 to detect replacements that preserve size, timestamps, and file identity.
+
+## Token consumption
+
+Running `VCC.py` consumes **zero LLM/API tokens**: it is a local deterministic Python program. Tokens are consumed only when an agent reads the generated text or search stdout.
+
+The console's `words` count is not an OpenAI, Anthropic, or GitHub model-token count. VCC's lightweight tokenizer groups letter/digit runs, counts punctuation separately, and ignores whitespace, so use it only as a relative size estimate.
+
+Token cost has three distinct layers. Current repository measurements are sizes, not model-token guarantees:
+
+| Layer | Current size or behavior | Typical impact |
+|---|---|---|
+| Skill discovery | Four descriptions total 722 characters | Small; descriptions help the agent decide which skill to load |
+| Invoked instructions | `conversation-compiler` 4.96 KB, `readchat` 2.17 KB, `recall` 4.45 KB, `searchchat` 3.01 KB | Small to moderate; normally only the invoked skill body is loaded |
+| VCC execution | Local Python, zero API tokens | No model cost until stdout or files are read |
+| Search/view consumption | Proportional to returned matches and transcript text read by the agent | Usually the dominant VCC-related token cost |
+
+Installing all four companion skills does not imply loading all four instruction bodies for every request. The host may expose their short descriptions for routing, then load only the applicable skill. Exact behavior depends on the agent host, and its wrappers, tool-call messages, reasoning, and final response also consume tokens independently of VCC.
+
+Let `U` be retained user blocks, `A` retained assistant text blocks, `S_tool` the total lexical size of emitted tool-call summaries, `tu` the `-tu` limit, and `t` the `-t` limit:
+
+- Full-view context is approximately proportional to all visible transcript text: `Θ(Cvisible)` lexical content.
+- Brief-view content is roughly bounded by `O(U·tu + A·t + S_tool + headers)` VCC lexical units; thinking and tool-result bodies are normally omitted. Some summary fields, such as paths and patterns, are not length-capped.
+- Focused/search output is proportional to matching lines plus block metadata, not the complete transcript.
+
+For lowest agent token use: run `--search-only`, limit returned matches, materialize only selected sessions with `--chain-window 2`, read `.min.txt`, and open only cited `.txt` ranges. Avoid placing an entire `.txt` view into context when a focused range is sufficient. Exact model tokens must be measured with the tokenizer of the model actually consuming the view.
+
+## Current status and roadmap
+
+VCC 2.3.2 is ready for personal workflows, local team use, and a public beta. It is not intended to be a centralized, multi-tenant conversation-history service. Within the currently validated scope, there are no known release-blocking P0/P1 issues.
+
+Current release evidence includes:
+
+- deterministic parsing and search for Codex, Claude Code, GitHub Copilot CLI, and DeepSeek Harness logs;
+- 54 automated tests, four skill-package validators, and representative sanitized fixtures for all four clients;
+- verification against a real Codex session containing multiple compaction boundaries;
+- Linux, macOS, and Windows CI across the supported Python range, plus a reproducible benchmark tool;
+- bounded media decoding, cache-integrity checks, conservative regex guards, and source-aware recall selection.
+
+The source JSONL remains authoritative. Generated views and caches are derived artifacts: they may be deleted after use, or retained privately when repeated lookup justifies the storage and privacy cost. The streaming normalizer reads one raw line at a time, buffers only the smallest client-safe unit, and retains only the selected chains. A local 100,000-record, 47.9 MB synthetic Codex benchmark with `--chain-window 2` reduced peak RSS from 244 MB to 19.8 MB and elapsed time from 0.459 s to 0.339 s; results vary by platform and workload.
+
+Prioritized follow-up work:
+
+1. Expand real-world schema fixtures, schema-drift checks, malformed-input tests, and fuzz coverage as client formats evolve.
+2. Add OS-independent regex execution isolation or hard timeouts; the current guard is deliberately conservative and `--allow-unsafe-regex` remains an explicit escape hatch.
+3. Track performance regressions over larger benchmark tiers, including peak RSS and long-running cache behavior.
+4. Add an optional cross-platform high-integrity source-hash mode for deployments whose filesystem does not provide reliable replacement identity; Windows hashing is already automatic.
+5. Consider an opt-in, privacy-preserving incremental content index only if measured workloads justify it. VCC will not duplicate raw conversation text into a permanent index by default.
+
+Future client schemas are not assumed compatible until covered by fixtures and tests. VCC does not upload session data or require a cloud service.
+
+## Privacy and limitations
+
+Session logs and generated views may contain source code, commands, file paths, tool output, credentials, or other sensitive material.
+
+- Keep cache directories private and out of source control and cloud sync.
+- `--cache-dir` applies best-effort owner-only permissions on POSIX systems.
+- Do not publish generated views without reviewing them.
+- By default, an unterminated malformed final JSONL line is treated as a live-session tail and ignored with a warning; malformed middle records fail that input.
+- Multi-file runs isolate failed inputs, continue processing healthy files, and exit nonzero when any input failed. Use `--strict` for fail-fast behavior and to reject an incomplete tail.
+- Embedded media extensions are sanitized, base64 is validated, and each decoded item is limited to 64 MiB by default.
+- Broad materialized searches can consume substantial disk and memory; prefer `--search-only`.
+- A shared `-o` directory rejects equal input stems before writing.
+- Generated views reflect the source at compile time and do not prove current workspace or runtime state.
+
+## CLI reference
+
+```text
+VCC.py INPUT [INPUT ...]
+  --grep REGEX       Search role-aware blocks
+  --search-only      Require --grep; search incrementally without writing views
+  --cache-dir DIR    Override the private managed cache root
+  --cache-policy P   Reuse a valid cache or force refresh
+  --strict           Reject an incomplete final record and stop at the first input error
+  --literal TEXT     Search one literal string
+  --term TEXT        Add a literal anchor; repeat and combine with --match
+  --match all|any    Multi-term query semantics
+  -i, --ignore-case  Case-insensitive search
+  --format FORMAT    text, json, or ndjson search output
+  --max-matches-per-input N  Keep the N highest-scoring blocks per input
+  --diagnostics      Emit parser coverage, compaction boundaries, and unknown event types
+  --max-media-bytes N  Cap each decoded embedded item; 0 means unlimited
+  --chain-window N  Materialize only the newest N chains; 0 means all
+  --allow-unsafe-regex  Bypass conservative regex safety checks
+  -o, --output-dir   Export all outputs to a selected directory
+  -t N               Brief-view assistant/tool truncation limit (default: 128)
+  -tu N              Brief-view user truncation limit (default: 256)
+```
+
+`--grep` uses Python regular expressions. Escape regex metacharacters when searching for literal user text.
+
+Run `VCC.py history-search --help` for source selection, exact-current-session, query-mode, expansion, scoring, and result-limit options.
+
+Run `python benchmarks/benchmark_vcc.py` for a deterministic JSON benchmark of search-only, latest-two materialization, and cache-hit paths. Adjust `--records-per-chain`, `--chains`, `--payload-size`, and `--repeat` to compare versions on the same machine.
+
+## Citation
+
+```bibtex
+@article{zhang2026vcc,
+  title={View-oriented Conversation Compiler for Agent Trace Analysis},
+  author={Lvmin Zhang and Maneesh Agrawala},
+  year={2026}
+}
+```
