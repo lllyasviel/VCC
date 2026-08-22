@@ -151,8 +151,11 @@ class OutputPolicyTests(unittest.TestCase):
                 self.assertEqual(diagnostics["compaction_boundaries"], 1)
 
                 if client == "deepseek":
-                    entry = next(Path(cache).iterdir())
-                    full = next(entry.glob("*.txt")).read_text(encoding="utf-8")
+                    full_path = Path(
+                        diagnostics["recall_selection"]["pre_compaction_chain"]["full_view"]
+                    )
+                    self.assertEqual(full_path.name, "deepseek-harness_1.txt")
+                    full = full_path.read_text(encoding="utf-8")
                     for marker in ("deepseek user marker", "reasoning marker",
                                    "deepseek answer marker", "tool result marker",
                                    "session/title: DeepSeek fixture session",
